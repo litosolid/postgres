@@ -1706,6 +1706,8 @@ ReindexIndex(RangeVar *indexRelation)
 	Oid			indOid;
 	Oid			heapOid = InvalidOid;
 
+	//TODO: check if index is applied on a shared relation
+
 	/* lock level used here should match index lock reindex_index() */
 	indOid = RangeVarGetRelidExtended(indexRelation, AccessExclusiveLock,
 									  false, false,
@@ -1787,6 +1789,8 @@ ReindexTable(RangeVar *relation)
 	heapOid = RangeVarGetRelidExtended(relation, ShareLock, false, false,
 									   RangeVarCallbackOwnsTable, NULL);
 
+	//TODO: check if relation is shared
+
 	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST))
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
@@ -1802,7 +1806,10 @@ ReindexTable(RangeVar *relation)
  * That means this must not be called within a user transaction block!
  */
 void
-ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
+ReindexDatabase(const char *databaseName,
+				bool do_system,
+				bool do_user,
+				bool concurrent)
 {
 	Relation	relationRelation;
 	HeapScanDesc scan;
@@ -1813,6 +1820,12 @@ ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
 	ListCell   *l;
 
 	AssertArg(databaseName);
+
+	/* CONCURRENTLY operation is not allowed for a database */
+	if (concurrent && do_system)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex system concurrently")));
 
 	if (strcmp(databaseName, get_database_name(MyDatabaseId)) != 0)
 		ereport(ERROR,

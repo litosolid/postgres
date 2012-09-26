@@ -1258,6 +1258,10 @@ standard_ProcessUtility(Node *parsetree,
 			{
 				ReindexStmt *stmt = (ReindexStmt *) parsetree;
 
+				if (stmt->concurrent)
+					PreventTransactionChain(isTopLevel,
+											"REINDEX CONCURRENTLY");
+
 				/* we choose to allow this during "read only" transactions */
 				PreventCommandDuringRecovery("REINDEX");
 				switch (stmt->kind)
@@ -1278,8 +1282,8 @@ standard_ProcessUtility(Node *parsetree,
 						 */
 						PreventTransactionChain(isTopLevel,
 												"REINDEX DATABASE");
-						ReindexDatabase(stmt->name,
-										stmt->do_system, stmt->do_user);
+						ReindexDatabase(stmt->name, stmt->do_system,
+										stmt->do_user, stmt->concurrent);
 						break;
 					default:
 						elog(ERROR, "unrecognized object type: %d",

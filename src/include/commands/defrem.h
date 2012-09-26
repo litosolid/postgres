@@ -29,7 +29,7 @@ extern Oid DefineIndex(IndexStmt *stmt,
 extern void ReindexIndex(RangeVar *indexRelation);
 extern void ReindexTable(RangeVar *relation);
 extern void ReindexDatabase(const char *databaseName,
-				bool do_system, bool do_user);
+							bool do_system, bool do_user, bool concurrent);
 extern char *makeObjectName(const char *name1, const char *name2,
 			   const char *label);
 extern char *ChooseRelationName(const char *name1, const char *name2,

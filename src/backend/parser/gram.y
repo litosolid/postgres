@@ -6607,15 +6607,16 @@ opt_if_exists: IF_P EXISTS						{ $$ = TRUE; }
  *****************************************************************************/
 
 ReindexStmt:
-			REINDEX reindex_type qualified_name opt_force
+			REINDEX reindex_type qualified_name opt_force opt_concurrently
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $2;
 					n->relation = $3;
 					n->name = NULL;
+					n->concurrent = $5;
 					$$ = (Node *)n;
 				}
-			| REINDEX SYSTEM_P name opt_force
+			| REINDEX SYSTEM_P name opt_force opt_concurrently
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = OBJECT_DATABASE;
@@ -6623,9 +6624,10 @@ ReindexStmt:
 					n->relation = NULL;
 					n->do_system = true;
 					n->do_user = false;
+					n->concurrent = $5;
 					$$ = (Node *)n;
 				}
-			| REINDEX DATABASE name opt_force
+			| REINDEX DATABASE name opt_force opt_concurrently
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = OBJECT_DATABASE;
@@ -6633,6 +6635,7 @@ ReindexStmt:
 					n->relation = NULL;
 					n->do_system = true;
 					n->do_user = true;
+					n->concurrent = $5;
 					$$ = (Node *)n;
 				}
 		;
