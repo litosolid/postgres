@@ -1713,11 +1713,11 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 				 errmsg("cannot reindex index concurrently")));
 
 	/* lock level used here should match index lock reindex_index() */
-	// Change lock level here
-	indOid = RangeVarGetRelidExtended(indexRelation, AccessExclusiveLock,
-									  false, false,
-									  RangeVarCallbackForReindexIndex,
-									  (void *) &heapOid);
+	indOid = RangeVarGetRelidExtended(indexRelation,
+				concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock,
+				false, false,
+				RangeVarCallbackForReindexIndex,
+				(void *) &heapOid);
 
 	reindex_index(indOid, false, concurrent);
 }
@@ -1791,9 +1791,10 @@ ReindexTable(RangeVar *relation, bool concurrent)
 	Oid			heapOid;
 
 	/* The lock level used here should match reindex_relation(). */
-	//Change the lock level here??
-	heapOid = RangeVarGetRelidExtended(relation, ShareLock, false, false,
-									   RangeVarCallbackOwnsTable, NULL);
+	heapOid = RangeVarGetRelidExtended(relation,
+		concurrent ? ShareUpdateExclusiveLock : ShareLock,
+		false, false,
+		RangeVarCallbackOwnsTable, NULL);
 
 	/* REINDEX CONCURRENTLY not supported yet */
 	if (concurrent)
