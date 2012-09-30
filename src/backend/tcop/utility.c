@@ -1267,10 +1267,10 @@ standard_ProcessUtility(Node *parsetree,
 				switch (stmt->kind)
 				{
 					case OBJECT_INDEX:
-						ReindexIndex(stmt->relation);
+						ReindexIndex(stmt->relation, stmt->concurrent);
 						break;
 					case OBJECT_TABLE:
-						ReindexTable(stmt->relation);
+						ReindexTable(stmt->relation, stmt->concurrent);
 						break;
 					case OBJECT_DATABASE:
 

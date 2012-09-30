@@ -2925,7 +2925,7 @@ IndexGetRelation(Oid indexId, bool missing_ok)
  * reindex_index - This routine is used to recreate a single index
  */
 void
-reindex_index(Oid indexId, bool skip_constraint_checks)
+reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 {
 	Relation	iRel,
 				heapRelation,
@@ -2944,10 +2944,29 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 	heapRelation = heap_open(heapId, ShareLock);
 
 	/*
+	 * Check if relation of index is shared, concurrent operation is not
+	 * allowed in this case.
+	 */
+	if (concurrent && heapRelation->rd_rel->relisshared)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex shared relation concurrently")));
+
+	/*
 	 * Open the target index relation and get an exclusive lock on it, to
 	 * ensure that no one else is touching this particular index.
 	 */
+	// TODO change lock level if operation is concurrent
 	iRel = index_open(indexId, AccessExclusiveLock);
+
+	/*
+	 * Check if index is for an exclusion constraint, concurrent operation is
+	 * not allowed in this case.
+	 */
+	if (concurrent && iRel->rd_index->indisexclusion)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex index for exclusion constraint")));
 
 	/*
 	 * Don't allow reindex on temp tables of other backends ... their local
@@ -3091,7 +3110,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags)
+reindex_relation(Oid relid, int flags, bool concurrent)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3105,6 +3124,16 @@ reindex_relation(Oid relid, int flags)
 	 * should match ReindexTable().
 	 */
 	rel = heap_open(relid, ShareLock);
+
+	/*
+	 * Check if relation is shared, it is not allowed to perform a concurrent
+	 * operation in this case. the same check is performed in reindex_index
+	 * but it looks cleaner to do that at relation level here.
+	 */
+	if (concurrent && rel->rd_rel->relisshared)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex shared relation concurrently")));
 
 	toast_relid = rel->rd_rel->reltoastrelid;
 
@@ -3169,7 +3198,9 @@ reindex_relation(Oid relid, int flags)
 			if (is_pg_class)
 				RelationSetIndexList(rel, doneIndexes, InvalidOid);
 
-			reindex_index(indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS));
+			reindex_index(indexOid,
+						  !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
+						  concurrent);
 
 			CommandCounterIncrement();
 
@@ -3204,7 +3235,11 @@ reindex_relation(Oid relid, int flags)
 	 * still hold the lock on the master table.
 	 */
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
-		result |= reindex_relation(toast_relid, flags);
+		result |= reindex_relation(toast_relid, flags, concurrent);
+
+	//TODO Continue processing for concurrent in the case of each index
+	//We need several subtransactions here invocating the successive reindexing
+	//processes for the indexes of this relation
 
 	return result;
 }

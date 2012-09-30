@@ -26,8 +26,8 @@ extern Oid DefineIndex(IndexStmt *stmt,
 			bool check_rights,
 			bool skip_build,
 			bool quiet);
-extern void ReindexIndex(RangeVar *indexRelation);
-extern void ReindexTable(RangeVar *relation);
+extern void ReindexIndex(RangeVar *indexRelation, bool concurrent);
+extern void ReindexTable(RangeVar *relation, bool concurrent);
 extern void ReindexDatabase(const char *databaseName,
 							bool do_system, bool do_user, bool concurrent);
 extern char *makeObjectName(const char *name1, const char *name2,

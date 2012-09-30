@@ -1701,20 +1701,25 @@ ChooseIndexColumnNames(List *indexElems)
  *		Recreate a specific index.
  */
 void
-ReindexIndex(RangeVar *indexRelation)
+ReindexIndex(RangeVar *indexRelation, bool concurrent)
 {
 	Oid			indOid;
 	Oid			heapOid = InvalidOid;
 
-	//TODO: check if index is applied on a shared relation
+	/* REINDEX CONCURRENTLY not supported yet */
+	if (concurrent)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex index concurrently")));
 
 	/* lock level used here should match index lock reindex_index() */
+	// Change lock level here
 	indOid = RangeVarGetRelidExtended(indexRelation, AccessExclusiveLock,
 									  false, false,
 									  RangeVarCallbackForReindexIndex,
 									  (void *) &heapOid);
 
-	reindex_index(indOid, false);
+	reindex_index(indOid, false, concurrent);
 }
 
 /*
@@ -1781,17 +1786,22 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
  *		Recreate all indexes of a table (and of its toast table, if any)
  */
 void
-ReindexTable(RangeVar *relation)
+ReindexTable(RangeVar *relation, bool concurrent)
 {
 	Oid			heapOid;
 
 	/* The lock level used here should match reindex_relation(). */
+	//Change the lock level here??
 	heapOid = RangeVarGetRelidExtended(relation, ShareLock, false, false,
 									   RangeVarCallbackOwnsTable, NULL);
 
-	//TODO: check if relation is shared
+	/* REINDEX CONCURRENTLY not supported yet */
+	if (concurrent)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex table concurrently")));
 
-	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST))
+	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST, concurrent))
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
 						relation->relname)));
@@ -1913,7 +1923,7 @@ ReindexDatabase(const char *databaseName,
 		StartTransactionCommand();
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST))
+		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST, false))
 			ereport(NOTICE,
 					(errmsg("table \"%s.%s\" was reindexed",
 							get_namespace_name(get_rel_namespace(relid)),
