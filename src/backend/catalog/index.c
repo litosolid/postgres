@@ -2986,6 +2986,8 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 	 * Also check for active uses of the index in the current transaction; we
 	 * don't want to reindex underneath an open indexscan.
 	 */
+	//Actually, what is necessary to do here is to skip this part and create a new fresh
+	//index that will be used for the concurrent switch.
 	CheckTableNotInUse(iRel, "REINDEX INDEX");
 
 	/*
@@ -3085,6 +3087,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 	heap_close(heapRelation, NoLock);
 }
 
+
 /*
  * reindex_relation - This routine is used to recreate all indexes
  * of a relation (and optionally its toast relation too, if any).
@@ -3115,7 +3118,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, bool concurrent)
+reindex_relation(Oid relid, int flags)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3135,6 +3138,7 @@ reindex_relation(Oid relid, int flags, bool concurrent)
 	 * operation in this case. the same check is performed in reindex_index
 	 * but it looks cleaner to do that at relation level here.
 	 */
+	//Move that to another place
 	if (concurrent && rel->rd_rel->relisshared)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -3203,9 +3207,7 @@ reindex_relation(Oid relid, int flags, bool concurrent)
 			if (is_pg_class)
 				RelationSetIndexList(rel, doneIndexes, InvalidOid);
 
-			reindex_index(indexOid,
-						  !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
-						  concurrent);
+			reindex_index(indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS));
 
 			CommandCounterIncrement();
 

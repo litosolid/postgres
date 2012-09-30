@@ -610,6 +610,8 @@ DefineIndex(IndexStmt *stmt,
 		return indexRelationId;
 	}
 
+	//Here is the phase where CONCURRENTLY really begins
+
 	/* save lockrelid and locktag for below, then close rel */
 	heaprelid = rel->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
@@ -1705,6 +1707,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 {
 	Oid			indOid;
 	Oid			heapOid = InvalidOid;
+	Oid			concurrentOid = InvalidOid;
 
 	/* REINDEX CONCURRENTLY not supported yet */
 	if (concurrent)
@@ -1719,7 +1722,22 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 				RangeVarCallbackForReindexIndex,
 				(void *) &heapOid);
 
-	reindex_index(indOid, false, concurrent);
+	/* This is all for the non-concurrent case */
+	if (!concurrent)
+	{
+		reindex_index(indOid, false);
+		return;
+	}
+
+	/*
+	 * Here begins the process for rebuilding concurrently the index.
+	 * We need first to create an index which is based on the same data
+	 * as the former index except. It will be only registered in catalogs
+	 * and will be built after.
+	 */
+	//TODO build necessary info then launch index_create correctly
+
+	//Then perform a bunch of checks on visibility
 }
 
 /*
