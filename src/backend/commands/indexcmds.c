@@ -1543,7 +1543,7 @@ ChooseIndexName(const char *tabname, Oid namespaceId,
 	{
 		indexname = ChooseRelationName(tabname,
 									   NULL,
-									   "concurrent",
+									   "cct",
 									   namespaceId);
 	}
 	else
