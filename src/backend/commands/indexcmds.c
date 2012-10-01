@@ -1674,7 +1674,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	concurrentOid = index_concurrent_create(indOid);
+	concurrentOid = index_concurrent_create(heapOid, indOid);
 
 	/* Build new concurrent index */
 	//call to index_concurrent_build

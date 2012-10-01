@@ -1090,105 +1090,78 @@ index_create(Relation heapRelation,
  * on.
  */
 Oid
-index_concurrent_create(Oid indOid)
+index_concurrent_create(Oid heapOid, Oid indOid)
 {
 	Relation	indexRelation;
-	Relation	pg_index, pg_class;
+	Relation	heapRelation;
+	IndexInfo  *indexInfo;
 	Oid			concurrentOid = InvalidOid;
 	/* Values for creation of the concurrent index */
-	Datum		*values;
-	bool		*nulls;
-	HeapTuple	tuple, tupleConcurrent;
-	Oid			reltablespace;
-	char		relpersistence;
-	char	   *concurrentName;
+	char	   *concurrentName = "test";
+	List	   *columnNames = NIL;
+	int			i;
+	HeapTuple	indexTuple;
+	Datum       indclassDatum, indoptionDatum;
+	oidvector  *indclass;
+	int2vector *indcoloptions;
+	bool		isnull;
 
-	/* Open the system catalog index relation */
-	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
-	pg_class = heap_open(RelationRelationId, RowExclusiveLock);
+	indexRelation = index_open(indOid, RowExclusiveLock);
+	heapRelation = heap_open(heapOid, RowExclusiveLock);
 
-	/*
-	 * We need also some data from the pg_class entry of former index
-	 * to define a correct new OID for concurrent index.
-	 */
-	indexRelation = heap_open(indOid, RowExclusiveLock);
-	relpersistence = indexRelation->rd_rel->relpersistence;
-	reltablespace = indexRelation->rd_rel->reltablespace;
-	heap_close(indexRelation, RowExclusiveLock);
+	/* Concurrent index uses the same index information as former index */
+	indexInfo = BuildIndexInfo(indexRelation);
 
-	tuple = SearchSysCacheCopy1(INDEXRELID,
-								ObjectIdGetDatum(indOid));
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for index %u", indOid);
+	/* Build the list of column names */
+	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+	{
+		AttrNumber	attnum = indexInfo->ii_KeyAttrNumbers[i];
+		Form_pg_attribute attform = heapRelation->rd_att->attrs[attnum - 1];;
 
-	/* Get the values of former index */
-	values = (Datum *) palloc(Natts_pg_index * sizeof(Datum));
-	nulls = (bool *) palloc(Natts_pg_index * sizeof(bool));
-	heap_deform_tuple(tuple, RelationGetDescr(pg_index), values, nulls);
+		/* Pick it up from the relation */
+		columnNames = lappend(columnNames, pstrdup(NameStr(attform->attname)));
+	}
 
-	/* Get a new OID for the concurrent index */
-	concurrentOid = GetNewRelFileNode(reltablespace, pg_class, relpersistence);
+	/* Get the array of class and column options IDs from index info */
+	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indOid));
+    if (!HeapTupleIsValid(indexTuple))
+        elog(ERROR, "cache lookup failed for index %u", indOid);
+	indclassDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+                                    Anum_pg_index_indclass, &isnull);
+    Assert(!isnull);
+    indclass = (oidvector *) DatumGetPointer(indclassDatum);
 
-	/* Modify fields for concurrent index */
-	values[Anum_pg_index_indexrelid - 1] = ObjectIdGetDatum(concurrentOid);
-	values[Anum_pg_index_indisvalid - 1] = BoolGetDatum(false);
-	values[Anum_pg_index_indisready - 1] = BoolGetDatum(false);
-	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(indOid);
+	indoptionDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+									 Anum_pg_index_indoption, &isnull);
+    Assert(!isnull);
+	indcoloptions = (int2vector *) DatumGetPointer(indoptionDatum);
 
-	tupleConcurrent = heap_form_tuple(RelationGetDescr(pg_index), values, nulls);
+	/* Now create the concurrent index */
+	concurrentOid = index_create(heapRelation,
+								 (const char*)concurrentName,
+								 InvalidOid,
+								 InvalidOid,
+								 indexInfo,
+								 columnNames,
+								 indexRelation->rd_rel->relam,
+								 indexRelation->rd_rel->reltablespace,
+								 indOid,
+								 indexRelation->rd_indcollation,
+								 indclass->values,
+								 indcoloptions->values,
+								 (Datum) indexRelation->rd_options, // This needs to be checked
+								 indexRelation->rd_index->indisprimary,
+								 false,	/* is constraint? */
+								 false,	/* is deferrable? */
+								 false,	/* is initially deferred? */
+								 false,	/* allow table to be a system catalog? */
+								 true,	/* skip build? */
+								 true); /* concurrent? */
 
-	/* Then insert the new entry in pg_index */
-	simple_heap_insert(pg_index, tupleConcurrent);
-
-	/* Clean up */
-	heap_close(pg_index, RowExclusiveLock);
-	heap_freetuple(tuple);
-	heap_freetuple(tupleConcurrent);
-	pfree(nulls);
-	pfree(values);
-
-	/* Now build the new pg_class entry for concurrent index */
-	//Not possible to get the pg_class entry of an index with that...
-	InsertPgClassTuple(pg_class, indexRelation,
-					   RelationGetRelid(indexRelation),
-					   (Datum) 0,
-					   reloptions);
-
-	tuple = SearchSysCacheCopy1(RELOID,
-								ObjectIdGetDatum(indOid));
-
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for relation %u", indOid);
-
-	values = (Datum *) palloc(Natts_pg_class * sizeof(Datum));
-	nulls = (bool *) palloc(Natts_pg_class * sizeof(bool));
-	heap_deform_tuple(tuple, RelationGetDescr(pg_class), values, nulls);
-
-	/* Get a new name for concurrent index */
-	concurrentName = "test"; //TODO
-
-	/* Modify necessary fields for concurrent index and build tuple */
-	values[Anum_pg_class_relname - 1] = ObjectIdGetDatum(concurrentOid);
-	HeapTupleSetOid(tupleConcurrent, concurrentOid);
-	tupleConcurrent = heap_form_tuple(RelationGetDescr(pg_class), values, nulls);
-
-	/* Then insert the new entry in pg_index */
-	simple_heap_insert(pg_index, tupleConcurrent);
-
-	/* Close relations */
-	heap_close(pg_class, RowExclusiveLock);
-	heap_freetuple(tuple);
-	heap_freetuple(tupleConcurrent);
-	pfree(nulls);
-	pfree(values);
-
-	/*
-	 * Record dependencies of the concurrent index with the table.
-	 * A constraint index cannot be created in concurrent processing, so
-	 * no entries to pg_constraint are necessary in this case.
-	 */
-	//TODO
-	//Reformat code inside create_index relation to dependency generation
+	/* Close the relations used and clean up */
+	heap_close(heapRelation, RowExclusiveLock);
+	index_close(indexRelation, RowExclusiveLock);
+	ReleaseSysCache(indexTuple);
 
 	return concurrentOid;
 }
