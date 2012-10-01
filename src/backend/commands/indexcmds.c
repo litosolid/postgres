@@ -1664,8 +1664,15 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	Oid			heapOid = InvalidOid;
 	Oid			concurrentOid = InvalidOid;
 	char	   *concurrentName;
+	Relation	heapRelation, indexRel;
+	LockRelId	heaprelid;
+	LOCKTAG		heaplocktag;
+	Snapshot	snapshot;
+	VirtualTransactionId *old_lockholders;
+	VirtualTransactionId *old_snapshots;
+	int			i, n_old_snapshots;
+	bool		primary;
 
-	/* lock level used here should match index lock reindex_index() */
 	indOid = RangeVarGetRelidExtended(indexRelation,
 				concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock,
 				false, false,
@@ -1696,15 +1703,175 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	concurrentOid = index_concurrent_create(heapOid, indOid, concurrentName);
+	/* lock level used here should match index lock index_concurrent_create() */
+	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
+	concurrentOid = index_concurrent_create(heapRelation, indOid, concurrentName);
 
-	/* Build new concurrent index */
-	//call to index_concurrent_build
+	/* save lockrelid and locktag for below, then close rel */
+	heaprelid = heapRelation->rd_lockInfo.lockRelId;
+	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
+	heap_close(heapRelation, NoLock);
+
+	LockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
+
+	/* Like end of phase 1 of CREATE INDEX CONCURRENTLY */
+	//TODO refactoring and far more comments
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+	StartTransactionCommand();
+
+	/* Like phase 2 of CREATE INDEX CONCURRENTLY */
+	//TODO refactoring and far more comments
+	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
+
+	while (VirtualTransactionIdIsValid(*old_lockholders))
+	{
+		VirtualXactLock(*old_lockholders, true);
+		old_lockholders++;
+	}
+
+	indexRel = index_open(indOid, ShareUpdateExclusiveLock);
+	primary = indexRel->rd_index->indisprimary;
+	index_close(indexRel, ShareUpdateExclusiveLock);
+
+	/* Perform concurrent build of new concurrent index */
+	index_concurrent_build(heapOid,
+						   concurrentOid,
+						   primary);
+
+	/*
+	 * Update the pg_index row of the concurrent index as ready for inserts.
+	 * Once we commit this transaction, any new transactions that open the table
+	 * must insert new entries into the index for insertions and non-HOT updates.
+	 */
+	index_concurrent_mark(concurrentOid, INDEX_MARK_READY);
+
+	/* we can do away with our snapshot */
+	PopActiveSnapshot();
+
+	/*
+	 * Commit this transaction to make the indisready update visible for
+	 * concurrent index.
+	 */
+	CommitTransactionCommand();
+	StartTransactionCommand();
+
+	/*
+	 * We once again wait until no transaction can have the table open with
+	 * the index marked as read-only for updates.
+	 */
+	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
+
+	while (VirtualTransactionIdIsValid(*old_lockholders))
+	{
+		VirtualXactLock(*old_lockholders, true);
+		old_lockholders++;
+	}
+
+	/* Take the reference snapshot */
+	snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(snapshot);
+
+	/*
+	 * Scan the index and the heap, insert any missing index entries.
+	 */
+	validate_index(heapOid, concurrentOid, snapshot);
+
+	old_snapshots = GetCurrentVirtualXIDs(snapshot->xmin, true, false,
+										  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
+										  &n_old_snapshots);
+
+	//This is a simple copy-paste of the code in CREATE INDEX CONCURRENTLY
+	//Refactoring please!
+	for (i = 0; i < n_old_snapshots; i++)
+	{
+		if (!VirtualTransactionIdIsValid(old_snapshots[i]))
+			continue;			/* found uninteresting in previous cycle */
+
+		if (i > 0)
+		{
+			/* see if anything's changed ... */
+			VirtualTransactionId *newer_snapshots;
+			int			n_newer_snapshots;
+			int			j;
+			int			k;
+
+			newer_snapshots = GetCurrentVirtualXIDs(snapshot->xmin,
+													true, false,
+										 PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
+													&n_newer_snapshots);
+			for (j = i; j < n_old_snapshots; j++)
+			{
+				if (!VirtualTransactionIdIsValid(old_snapshots[j]))
+					continue;	/* found uninteresting in previous cycle */
+				for (k = 0; k < n_newer_snapshots; k++)
+				{
+					if (VirtualTransactionIdEquals(old_snapshots[j],
+												   newer_snapshots[k]))
+						break;
+				}
+				if (k >= n_newer_snapshots)		/* not there anymore */
+					SetInvalidVirtualTransactionId(old_snapshots[j]);
+			}
+			pfree(newer_snapshots);
+		}
+
+		if (VirtualTransactionIdIsValid(old_snapshots[i]))
+			VirtualXactLock(old_snapshots[i], true);
+	}
+
+	/*
+	 * Concurrent index can now be marked valid -- update its pg_index entry
+	 */
+	index_concurrent_mark(concurrentOid, INDEX_MARK_VALID);
+
+	//This needs refactoring...
+	CacheInvalidateRelcacheByRelid(heaprelid.relId);
+
+	/* we can now do away with our active snapshot */
+	PopActiveSnapshot();
+
+	/* And we can remove the validating snapshot too */
+	UnregisterSnapshot(snapshot);
+
+	/* Commit this transaction to make the concurrent index valid */
+	CommitTransactionCommand();
+	StartTransactionCommand();
+
+	/*
+	 * Now that the concurrent index is valid and can be used,
+	 * it is necessary to swap the old and new indexes.
+	 * The concurrent index has simply to replace the index that was targetted
+	 * for rebuild.
+	 */
+	//TODO: swap the old and new index.
+
+	/* Mark the old index as invalid */
+	index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
+
+	//TODO wait for other transactions to finish
+	CommitTransactionCommand();
+	StartTransactionCommand();
+
+
+	//This is part of the new process and does not need refactoring, honestly
+
+	/* Mark the old index as not ready */
+
+	index_concurrent_mark(indOid, INDEX_MARK_NOT_READY);
+	//Drop the old index
+
+
 
 	//TODO build necessary info then launch index_create correctly
 	//Then perform a bunch of checks on visibility and transaction handling
 
 	//Then perform visibility checks, etc, etc.
+
+	/*
+	 * Last thing to do is release the session-level lock on the parent table.
+	 */
+	UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
 }
 
 /*

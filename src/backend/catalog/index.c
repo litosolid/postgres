@@ -1090,10 +1090,9 @@ index_create(Relation heapRelation,
  * on.
  */
 Oid
-index_concurrent_create(Oid heapOid, Oid indOid, char *concurrentName)
+index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 {
 	Relation	indexRelation;
-	Relation	heapRelation;
 	IndexInfo  *indexInfo;
 	Oid			concurrentOid = InvalidOid;
 	List	   *columnNames = NIL;
@@ -1105,7 +1104,6 @@ index_concurrent_create(Oid heapOid, Oid indOid, char *concurrentName)
 	bool		isnull;
 
 	indexRelation = index_open(indOid, RowExclusiveLock);
-	heapRelation = heap_open(heapOid, RowExclusiveLock);
 
 	/* Concurrent index uses the same index information as former index */
 	indexInfo = BuildIndexInfo(indexRelation);
@@ -1157,7 +1155,6 @@ index_concurrent_create(Oid heapOid, Oid indOid, char *concurrentName)
 								 true); /* concurrent? */
 
 	/* Close the relations used and clean up */
-	heap_close(heapRelation, RowExclusiveLock);
 	index_close(indexRelation, RowExclusiveLock);
 	ReleaseSysCache(indexTuple);
 
