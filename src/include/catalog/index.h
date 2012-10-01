@@ -56,6 +56,8 @@ extern Oid index_concurrent_create(Oid indOid);
 extern void index_concurrent_build(Oid heapId,
 								   Oid indexOid,
 								   bool isprimary);
+extern void index_concurrent_mark_ready(Oid indOid);
+extern void index_concurrent_mark_valid(Oid indOid);
 
 extern void index_constraint_create(Relation heapRelation,
 						Oid indexRelationId,

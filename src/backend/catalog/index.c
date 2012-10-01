@@ -1142,6 +1142,75 @@ index_concurrent_build(Oid heapId,
     index_close(indexRelation, NoLock);
 }
 
+
+/*
+ * index_concurrent_mark_ready
+ *
+ * Update the pg_index row to mark the index as ready for inserts. The caller
+ * needs to commit the transaction as any new transactions that open the table
+ * must insert new entries into the index for insertions and non-HOT updates.
+ */
+void
+index_concurrent_mark_ready(Oid indOid)
+{
+	Relation		pg_index;
+	HeapTuple		indexTuple;
+	Form_pg_index	indexForm;
+
+	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID,
+									 ObjectIdGetDatum(indOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+	Assert(!indexForm->indisready);
+	Assert(!indexForm->indisvalid);
+
+	indexForm->indisready = true;
+
+	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
+	CatalogUpdateIndexes(pg_index, indexTuple);
+
+	heap_close(pg_index, RowExclusiveLock);
+}
+
+
+/*
+ * index_concurrent_mark_valid
+ *
+ * Mark given index as valid. This is used for index operations in concurrent
+ * environment. The caller needs to commit this transaction to make it visible
+ * to any new transactions.
+ */
+void
+index_concurrent_mark_valid(Oid indOid)
+{
+	Relation		pg_index;
+	HeapTuple		indexTuple;
+	Form_pg_index	indexForm;
+
+	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID,
+									 ObjectIdGetDatum(indOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+	Assert(indexForm->indisready);
+	Assert(!indexForm->indisvalid);
+
+	indexForm->indisvalid = true;
+
+	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
+	CatalogUpdateIndexes(pg_index, indexTuple);
+
+	heap_close(pg_index, RowExclusiveLock);
+}
+
+
 /*
  * index_constraint_create
  *
