@@ -1144,14 +1144,25 @@ index_concurrent_build(Oid heapId,
 
 
 /*
- * index_concurrent_mark_ready
+ * index_concurrent_mark
  *
- * Update the pg_index row to mark the index as ready for inserts. The caller
- * needs to commit the transaction as any new transactions that open the table
- * must insert new entries into the index for insertions and non-HOT updates.
+ * Update the pg_index row to mark the index with a new status. All the
+ * operations that can be performed on the index marking are listed in
+ * IndexMarkOperation.
+ * When a marking modification is done, the caller needs to commit current
+ * transaction as any new transactions that open the table might perform
+ * read or write operations on the table related.
+ * - INDEX_MARK_READY, index is marked as ready for inserts. When marked as
+ *	 ready, the index needs to be invalid.
+ * - INDEX_MARK_NOT_READY, index is marked as not ready for inserts. When
+ *   marked as not ready, the index needs to be already invalid.
+ * - INDEX_MARK_VALID, index is marked as valid for selects. When marked as
+ *	 valid, the index needs to be ready.
+ * - INDEX_MARK_NOT_VALID, index is marked as not valid for selects, When
+ *   marked as not valid, the index needs to be ready.
  */
 void
-index_concurrent_mark_ready(Oid indOid)
+index_concurrent_mark(Oid indOid, IndexMarkOperation operation)
 {
 	Relation		pg_index;
 	HeapTuple		indexTuple;
@@ -1165,44 +1176,36 @@ index_concurrent_mark_ready(Oid indOid)
 		elog(ERROR, "cache lookup failed for index %u", indOid);
 	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
 
-	Assert(!indexForm->indisready);
-	Assert(!indexForm->indisvalid);
+	switch(operation)
+	{
+		case INDEX_MARK_READY:
+			Assert(!indexForm->indisready);
+			Assert(!indexForm->indisvalid);
+			indexForm->indisready = true;
+			break;
 
-	indexForm->indisready = true;
+		case INDEX_MARK_NOT_READY:
+			Assert(indexForm->indisready);
+			Assert(!indexForm->indisvalid);
+			indexForm->indisready = false;
+			break;
 
-	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-	CatalogUpdateIndexes(pg_index, indexTuple);
+		case INDEX_MARK_VALID:
+			Assert(indexForm->indisready);
+			Assert(!indexForm->indisvalid);
+			indexForm->indisvalid = true;
+			break;
 
-	heap_close(pg_index, RowExclusiveLock);
-}
+		case INDEX_MARK_NOT_VALID:
+			Assert(indexForm->indisready);
+			Assert(indexForm->indisvalid);
+			indexForm->indisvalid = false;
+			break;
 
-
-/*
- * index_concurrent_mark_valid
- *
- * Mark given index as valid. This is used for index operations in concurrent
- * environment. The caller needs to commit this transaction to make it visible
- * to any new transactions.
- */
-void
-index_concurrent_mark_valid(Oid indOid)
-{
-	Relation		pg_index;
-	HeapTuple		indexTuple;
-	Form_pg_index	indexForm;
-
-	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
-
-	indexTuple = SearchSysCacheCopy1(INDEXRELID,
-									 ObjectIdGetDatum(indOid));
-	if (!HeapTupleIsValid(indexTuple))
-		elog(ERROR, "cache lookup failed for index %u", indOid);
-	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
-
-	Assert(indexForm->indisready);
-	Assert(!indexForm->indisvalid);
-
-	indexForm->indisvalid = true;
+		default:
+			/* Do nothing */
+			break;
+	}
 
 	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
 	CatalogUpdateIndexes(pg_index, indexTuple);

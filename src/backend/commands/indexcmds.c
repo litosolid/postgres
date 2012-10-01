@@ -696,7 +696,7 @@ DefineIndex(IndexStmt *stmt,
 	 * commit this transaction, any new transactions that open the table must
 	 * insert new entries into the index for insertions and non-HOT updates.
 	 */
-	index_concurrent_mark_ready(indexRelationId);
+	index_concurrent_mark(indexRelationId, INDEX_MARK_READY);
 
 	/* we can do away with our snapshot */
 	PopActiveSnapshot();
@@ -820,7 +820,7 @@ DefineIndex(IndexStmt *stmt,
 	/*
 	 * Index can now be marked valid -- update its pg_index entry
 	 */
-	index_concurrent_mark_valid(indexRelationId);
+	index_concurrent_mark(indexRelationId, INDEX_MARK_VALID);
 
 	/*
 	 * The pg_index update will cause backends (including this one) to update
