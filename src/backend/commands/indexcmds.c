@@ -305,7 +305,6 @@ DefineIndex(IndexStmt *stmt,
 	Oid			tablespaceId;
 	List	   *indexColNames;
 	Relation	rel;
-	Relation	indexRelation;
 	HeapTuple	tuple;
 	Form_pg_am	accessMethodForm;
 	bool		amcanorder;
@@ -692,27 +691,10 @@ DefineIndex(IndexStmt *stmt,
 	 * HOT-chain or the extension of the chain is HOT-safe for this index.
 	 */
 
-	/* Open and lock the parent heap relation */
-	rel = heap_openrv(stmt->relation, ShareUpdateExclusiveLock);
-
-	/* And the target index relation */
-	indexRelation = index_open(indexRelationId, RowExclusiveLock);
-
-	/* Set ActiveSnapshot since functions in the indexes may need it */
-	PushActiveSnapshot(GetTransactionSnapshot());
-
-	/* We have to re-build the IndexInfo struct, since it was lost in commit */
-	indexInfo = BuildIndexInfo(indexRelation);
-	Assert(!indexInfo->ii_ReadyForInserts);
-	indexInfo->ii_Concurrent = true;
-	indexInfo->ii_BrokenHotChain = false;
-
-	/* Now build the index */
-	index_build(rel, indexRelation, indexInfo, stmt->primary, false);
-
-	/* Close both the relations, but keep the locks */
-	heap_close(rel, NoLock);
-	index_close(indexRelation, NoLock);
+	/* Perform concurrent build of index */
+	index_concurrent_build(RangeVarGetRelid(stmt->relation, NoLock, false),
+						   indexRelationId,
+						   stmt->primary);
 
 	/*
 	 * Update the pg_index row to mark the index as ready for inserts. Once we
@@ -1732,12 +1714,16 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	/*
 	 * Here begins the process for rebuilding concurrently the index.
 	 * We need first to create an index which is based on the same data
-	 * as the former index except. It will be only registered in catalogs
+	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	//TODO build necessary info then launch index_create correctly
+	concurrentOid = index_concurrent_create(indOid);
 
-	//Then perform a bunch of checks on visibility
+	/* Build new concurrent index */
+	//call to index_concurrent_build
+
+	//TODO build necessary info then launch index_create correctly
+	//Then perform a bunch of checks on visibility and transaction handling
 }
 
 /*

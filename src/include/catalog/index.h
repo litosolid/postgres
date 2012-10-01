@@ -52,6 +52,11 @@ extern Oid index_create(Relation heapRelation,
 			 bool skip_build,
 			 bool concurrent);
 
+extern Oid index_concurrent_create(Oid indOid);
+extern void index_concurrent_build(Oid heapId,
+								   Oid indexOid,
+								   bool isprimary);
+
 extern void index_constraint_create(Relation heapRelation,
 						Oid indexRelationId,
 						IndexInfo *indexInfo,
@@ -89,9 +94,7 @@ extern double IndexBuildHeapScan(Relation heapRelation,
 
 extern void validate_index(Oid heapId, Oid indexId, Snapshot snapshot);
 
-extern void reindex_index(Oid indexId,
-						  bool skip_constraint_checks,
-						  bool concurrent);
+extern void reindex_index(Oid indexId, bool skip_constraint_checks);
 
 /* Flag bits for reindex_relation(): */
 #define REINDEX_REL_PROCESS_TOAST		0x01

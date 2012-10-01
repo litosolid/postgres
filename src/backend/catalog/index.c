@@ -607,6 +607,9 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indcheckxmin - 1] = BoolGetDatum(false);
 	/* we set isvalid and isready the same way */
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isvalid);
+	//For the time being this is set to 0 but will need to be changed once
+	//integration of concurrent creation is better.
+	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(InvalidOid);
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
@@ -1074,6 +1077,69 @@ index_create(Relation heapRelation,
 	index_close(indexRelation, NoLock);
 
 	return indexRelationId;
+}
+
+
+/*
+ * index_concurrent_create
+ *
+ * Create an index based on the given one that will be used for concurrent
+ * operations. The index is inserted into catalogs and needs to be built later
+ * on.
+ */
+Oid
+index_concurrent_create(Oid indOid)
+{
+	Relation	iRel,
+				heapRelation;
+	Oid			relid;
+	Oid			concurrentOid = InvalidOid;
+	IndexInfo  *indexInfo, *concurrentIndexInfo;
+
+	//TODO create an index for concurrent operations
+	//Need to perform a correct call to index_create, relying on the
+	//same error checks and structures
+
+	return concurrentOid;
+}
+
+
+/*
+ * index_concurrent_build
+ *
+ * Build index for a concurrent operation. Low-level locks
+ * are done when this operation is performed.
+ */
+void
+index_concurrent_build(Oid heapId,
+					   Oid indexOid,
+					   bool isprimary)
+{
+	Relation	rel,
+				indexRelation;
+	IndexInfo  *indexInfo;
+
+    /* Open and lock the parent heap relation */
+    rel = heap_open(heapId, ShareUpdateExclusiveLock);
+
+    /* And the target index relation */
+    indexRelation = index_open(indexOid, RowExclusiveLock);
+
+    /* Set ActiveSnapshot since functions in the indexes may need it */
+    PushActiveSnapshot(GetTransactionSnapshot());
+
+    /* We have to re-build the IndexInfo struct, since it was lost in commit */
+    indexInfo = BuildIndexInfo(indexRelation);
+    Assert(!indexInfo->ii_ReadyForInserts);
+    indexInfo->ii_Concurrent = true;
+    indexInfo->ii_BrokenHotChain = false;
+
+    /* Now build the index */
+    index_build(rel, indexRelation, indexInfo, isprimary, false);
+
+    /* Close both the relations, but keep the locks */
+    heap_close(rel, NoLock);
+    index_close(indexRelation, NoLock);
 }
 
 /*
@@ -2925,7 +2991,7 @@ IndexGetRelation(Oid indexId, bool missing_ok)
  * reindex_index - This routine is used to recreate a single index
  */
 void
-reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
+reindex_index(Oid indexId, bool skip_constraint_checks)
 {
 	Relation	iRel,
 				heapRelation,
@@ -2943,17 +3009,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 	 * allow INSERT/UPDATE/DELETE operations.
 	 */
 	heapId = IndexGetRelation(indexId, false);
-	heapRelation = heap_open(heapId,
-						 concurrent ? ShareUpdateExclusiveLock : ShareLock);
-
-	/*
-	 * Check if relation of index is shared, concurrent operation is not
-	 * allowed in this case.
-	 */
-	if (concurrent && heapRelation->rd_rel->relisshared)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex shared relation concurrently")));
+	heapRelation = heap_open(heapId, ShareLock);
 
 	/*
 	 * Open the target index relation and get an exclusive lock on it, to
@@ -2961,17 +3017,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 	 * For concurrent operation, a lower lock is taken to allow INSERT, UPDATE
 	 * and DELETE operations.
 	 */
-	iRel = index_open(indexId,
-					  concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock);
-
-	/*
-	 * Check if index is for an exclusion constraint, concurrent operation is
-	 * not allowed in this case.
-	 */
-	if (concurrent && iRel->rd_index->indisexclusion)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex index for exclusion constraint")));
+	iRel = index_open(indexId, AccessExclusiveLock);
 
 	/*
 	 * Don't allow reindex on temp tables of other backends ... their local
@@ -2986,8 +3032,6 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
 	 * Also check for active uses of the index in the current transaction; we
 	 * don't want to reindex underneath an open indexscan.
 	 */
-	//Actually, what is necessary to do here is to skip this part and create a new fresh
-	//index that will be used for the concurrent switch.
 	CheckTableNotInUse(iRel, "REINDEX INDEX");
 
 	/*
@@ -3118,7 +3162,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, bool concurrent)
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags)
+reindex_relation(Oid relid, int flags, bool concurrent)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3138,7 +3182,6 @@ reindex_relation(Oid relid, int flags)
 	 * operation in this case. the same check is performed in reindex_index
 	 * but it looks cleaner to do that at relation level here.
 	 */
-	//Move that to another place
 	if (concurrent && rel->rd_rel->relisshared)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -3244,9 +3287,8 @@ reindex_relation(Oid relid, int flags)
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
 		result |= reindex_relation(toast_relid, flags, concurrent);
 
-	//TODO Continue processing for concurrent in the case of each index
-	//We need several subtransactions here invocating the successive reindexing
-	//processes for the indexes of this relation
+	//Need to do some processing here for concurrent case using the APIs defined
+	//at index level
 
 	return result;
 }
