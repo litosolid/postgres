@@ -3603,6 +3603,7 @@ _copyReindexStmt(const ReindexStmt *from)
 	COPY_STRING_FIELD(name);
 	COPY_SCALAR_FIELD(do_system);
 	COPY_SCALAR_FIELD(do_user);
+	COPY_SCALAR_FIELD(concurrent);
 
 	return newnode;
 }

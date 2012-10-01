@@ -1687,6 +1687,8 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 
 	//TODO build necessary info then launch index_create correctly
 	//Then perform a bunch of checks on visibility and transaction handling
+
+	//Then perform visibility checks, etc, etc.
 }
 
 /*
