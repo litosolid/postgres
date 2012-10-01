@@ -1689,7 +1689,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	namespaceOid = get_rel_namespace(heapOid);
 
 	/* Choose a relation name for concurrent index */
-	concurrentName = ChooseIndexName(get_rel_name(heapOid),
+	concurrentName = ChooseIndexName(get_rel_name(indOid),
 									 get_rel_namespace(heapOid),
 									 NULL,
 									 false,
