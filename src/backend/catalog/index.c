@@ -1090,14 +1090,12 @@ index_create(Relation heapRelation,
  * on.
  */
 Oid
-index_concurrent_create(Oid heapOid, Oid indOid)
+index_concurrent_create(Oid heapOid, Oid indOid, char *concurrentName)
 {
 	Relation	indexRelation;
 	Relation	heapRelation;
 	IndexInfo  *indexInfo;
 	Oid			concurrentOid = InvalidOid;
-	/* Values for creation of the concurrent index */
-	char	   *concurrentName = "test";
 	List	   *columnNames = NIL;
 	int			i;
 	HeapTuple	indexTuple;

@@ -68,8 +68,9 @@ static void ComputeIndexAttrs(IndexInfo *indexInfo,
 static Oid GetIndexOpClass(List *opclass, Oid attrType,
 				char *accessMethodName, Oid accessMethodId);
 static char *ChooseIndexName(const char *tabname, Oid namespaceId,
-				List *colnames, List *exclusionOpNames,
-				bool primary, bool isconstraint);
+							 List *colnames, List *exclusionOpNames,
+							 bool primary, bool isconstraint,
+							 bool concurrent);
 static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
@@ -445,7 +446,8 @@ DefineIndex(IndexStmt *stmt,
 											indexColNames,
 											stmt->excludeOpNames,
 											stmt->primary,
-											stmt->isconstraint);
+											stmt->isconstraint,
+											false);
 
 	/*
 	 * look up the access method, verify it can handle the requested features
@@ -1510,7 +1512,8 @@ ChooseRelationName(const char *name1, const char *name2,
 static char *
 ChooseIndexName(const char *tabname, Oid namespaceId,
 				List *colnames, List *exclusionOpNames,
-				bool primary, bool isconstraint)
+				bool primary, bool isconstraint,
+				bool concurrent)
 {
 	char	   *indexname;
 
@@ -1534,6 +1537,13 @@ ChooseIndexName(const char *tabname, Oid namespaceId,
 		indexname = ChooseRelationName(tabname,
 									   ChooseIndexNameAddition(colnames),
 									   "key",
+									   namespaceId);
+	}
+	else if (concurrent)
+	{
+		indexname = ChooseRelationName(tabname,
+									   NULL,
+									   "concurrent",
 									   namespaceId);
 	}
 	else
@@ -1650,9 +1660,10 @@ ChooseIndexColumnNames(List *indexElems)
 void
 ReindexIndex(RangeVar *indexRelation, bool concurrent)
 {
-	Oid			indOid;
+	Oid			indOid, namespaceOid;
 	Oid			heapOid = InvalidOid;
 	Oid			concurrentOid = InvalidOid;
+	char	   *concurrentName;
 
 	/* lock level used here should match index lock reindex_index() */
 	indOid = RangeVarGetRelidExtended(indexRelation,
@@ -1668,13 +1679,24 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 		return;
 	}
 
+	namespaceOid = get_rel_namespace(heapOid);
+
+	/* Choose a relation name for concurrent index */
+	concurrentName = ChooseIndexName(get_rel_name(namespaceOid),
+									 get_rel_namespace(heapOid),
+									 NULL,
+									 false,
+									 false,
+									 false,
+									 true);
+
 	/*
 	 * Here begins the process for rebuilding concurrently the index.
 	 * We need first to create an index which is based on the same data
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	concurrentOid = index_concurrent_create(heapOid, indOid);
+	concurrentOid = index_concurrent_create(heapOid, indOid, concurrentName);
 
 	/* Build new concurrent index */
 	//call to index_concurrent_build
