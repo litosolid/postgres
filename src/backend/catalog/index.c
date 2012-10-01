@@ -1090,35 +1090,105 @@ index_create(Relation heapRelation,
  * on.
  */
 Oid
-index_concurrent_create(Oid heapOid, Oid indOid)
+index_concurrent_create(Oid indOid)
 {
-	Relation	indexRelation,
-				heapRelation;
+	Relation	indexRelation;
+	Relation	pg_index, pg_class;
 	Oid			concurrentOid = InvalidOid;
-	IndexInfo  *indexInfo;
+	/* Values for creation of the concurrent index */
+	Datum		*values;
+	bool		*nulls;
+	HeapTuple	tuple, tupleConcurrent;
+	Oid			reltablespace;
+	char		relpersistence;
+	char	   *concurrentName;
 
-	/* Open and lock the parent heap relation */
-	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
-	/* And the target index relation */
-	indexRelation = index_open(indOid, RowExclusiveLock);
+	/* Open the system catalog index relation */
+	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+	pg_class = heap_open(RelationRelationId, RowExclusiveLock);
 
 	/*
-	 * Build index info of former index, the same information is shared
-	 * between the former index and its concurrent version.
+	 * We need also some data from the pg_class entry of former index
+	 * to define a correct new OID for concurrent index.
 	 */
-	indexInfo = BuildIndexInfo(indexRelation);
+	indexRelation = heap_open(indOid, RowExclusiveLock);
+	relpersistence = indexRelation->rd_rel->relpersistence;
+	reltablespace = indexRelation->rd_rel->reltablespace;
+	heap_close(indexRelation, RowExclusiveLock);
 
-	//TODO create an index for concurrent operations
-	//Need to perform a correct call to index_create, relying on the
-	//same error checks and structures
-	//concurrentOid = index_create(heapRelation,
-	//							 "indexname", //TODO
-	//							 InvalidOid,
-	//					);
+	tuple = SearchSysCacheCopy1(INDEXRELID,
+								ObjectIdGetDatum(indOid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for index %u", indOid);
 
-	/* Close rels, but keep locks */
-	index_close(indexRelation, NoLock);
-	heap_close(heapRelation, NoLock);
+	/* Get the values of former index */
+	values = (Datum *) palloc(Natts_pg_index * sizeof(Datum));
+	nulls = (bool *) palloc(Natts_pg_index * sizeof(bool));
+	heap_deform_tuple(tuple, RelationGetDescr(pg_index), values, nulls);
+
+	/* Get a new OID for the concurrent index */
+	concurrentOid = GetNewRelFileNode(reltablespace, pg_class, relpersistence);
+
+	/* Modify fields for concurrent index */
+	values[Anum_pg_index_indexrelid - 1] = ObjectIdGetDatum(concurrentOid);
+	values[Anum_pg_index_indisvalid - 1] = BoolGetDatum(false);
+	values[Anum_pg_index_indisready - 1] = BoolGetDatum(false);
+	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(indOid);
+
+	tupleConcurrent = heap_form_tuple(RelationGetDescr(pg_index), values, nulls);
+
+	/* Then insert the new entry in pg_index */
+	simple_heap_insert(pg_index, tupleConcurrent);
+
+	/* Clean up */
+	heap_close(pg_index, RowExclusiveLock);
+	heap_freetuple(tuple);
+	heap_freetuple(tupleConcurrent);
+	pfree(nulls);
+	pfree(values);
+
+	/* Now build the new pg_class entry for concurrent index */
+	//Not possible to get the pg_class entry of an index with that...
+	InsertPgClassTuple(pg_class, indexRelation,
+					   RelationGetRelid(indexRelation),
+					   (Datum) 0,
+					   reloptions);
+
+	tuple = SearchSysCacheCopy1(RELOID,
+								ObjectIdGetDatum(indOid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", indOid);
+
+	values = (Datum *) palloc(Natts_pg_class * sizeof(Datum));
+	nulls = (bool *) palloc(Natts_pg_class * sizeof(bool));
+	heap_deform_tuple(tuple, RelationGetDescr(pg_class), values, nulls);
+
+	/* Get a new name for concurrent index */
+	concurrentName = "test"; //TODO
+
+	/* Modify necessary fields for concurrent index and build tuple */
+	values[Anum_pg_class_relname - 1] = ObjectIdGetDatum(concurrentOid);
+	HeapTupleSetOid(tupleConcurrent, concurrentOid);
+	tupleConcurrent = heap_form_tuple(RelationGetDescr(pg_class), values, nulls);
+
+	/* Then insert the new entry in pg_index */
+	simple_heap_insert(pg_index, tupleConcurrent);
+
+	/* Close relations */
+	heap_close(pg_class, RowExclusiveLock);
+	heap_freetuple(tuple);
+	heap_freetuple(tupleConcurrent);
+	pfree(nulls);
+	pfree(values);
+
+	/*
+	 * Record dependencies of the concurrent index with the table.
+	 * A constraint index cannot be created in concurrent processing, so
+	 * no entries to pg_constraint are necessary in this case.
+	 */
+	//TODO
+	//Reformat code inside create_index relation to dependency generation
 
 	return concurrentOid;
 }

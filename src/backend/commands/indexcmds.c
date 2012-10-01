@@ -1654,12 +1654,6 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	Oid			heapOid = InvalidOid;
 	Oid			concurrentOid = InvalidOid;
 
-	/* REINDEX CONCURRENTLY not supported yet */
-	if (concurrent)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex index concurrently")));
-
 	/* lock level used here should match index lock reindex_index() */
 	indOid = RangeVarGetRelidExtended(indexRelation,
 				concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock,
@@ -1680,7 +1674,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	concurrentOid = index_concurrent_create(heapOid, indOid);
+	concurrentOid = index_concurrent_create(indOid);
 
 	/* Build new concurrent index */
 	//call to index_concurrent_build

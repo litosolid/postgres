@@ -62,7 +62,7 @@ extern Oid index_create(Relation heapRelation,
 			 bool skip_build,
 			 bool concurrent);
 
-extern Oid index_concurrent_create(Oid heapOid, Oid indOid);
+extern Oid index_concurrent_create(Oid indOid);
 extern void index_concurrent_build(Oid heapOid,
 								   Oid indexOid,
 								   bool isprimary);
