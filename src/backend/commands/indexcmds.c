@@ -75,6 +75,7 @@ static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 								Oid relId, Oid oldRelId, void *arg);
+static void WaitForVirtualLocks(LOCKTAG heaplocktag);
 
 /*
  * CheckIndexCompatible
@@ -657,18 +658,8 @@ DefineIndex(IndexStmt *stmt,
 	 * one of the transactions in question is blocked trying to acquire an
 	 * exclusive lock on our table.  The lock code will detect deadlock and
 	 * error out properly.
-	 *
-	 * Note: GetLockConflicts() never reports our own xid, hence we need not
-	 * check for that.	Also, prepared xacts are not reported, which is fine
-	 * since they certainly aren't going to do anything more.
 	 */
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForVirtualLocks(heaplocktag);
 
 	/*
 	 * At this moment we are sure that there are no transactions with the
@@ -715,13 +706,7 @@ DefineIndex(IndexStmt *stmt,
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
 	 */
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForVirtualLocks(heaplocktag);
 
 	/*
 	 * Now take the "reference snapshot" that will be used by validate_index()
@@ -1721,14 +1706,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	StartTransactionCommand();
 
 	/* Like phase 2 of CREATE INDEX CONCURRENTLY */
-	//TODO refactoring and far more comments
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForVirtualLocks(heaplocktag);
 
 	indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 	primary = indexRel->rd_index->indisprimary;
@@ -1760,13 +1738,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
 	 */
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForVirtualLocks(heaplocktag);
 
 	/* Take the reference snapshot */
 	snapshot = RegisterSnapshot(GetTransactionSnapshot());
@@ -1932,6 +1904,34 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 			LockRelationOid(*heapOid, ShareLock);
 	}
 }
+
+
+/*
+ * WaitForVirtualLocks
+ *
+ * Wait until no transaction can have the table open with the index marked as
+ * read-only for updates.
+ * To do this, inquire which xacts currently would conflict with ShareLock on
+ * the table referred by the LOCKTAG -- ie, which ones have a lock that permits
+ * writing the table. Then wait for each of these xacts to commit or abort.
+ * Note: GetLockConflicts() never reports our own xid, hence we need not
+ * check for that.	Also, prepared xacts are not reported, which is fine
+ * since they certainly aren't going to do anything more.
+ */
+static void
+WaitForVirtualLocks(LOCKTAG heaplocktag)
+{
+	VirtualTransactionId *old_lockholders;
+
+	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
+
+	while (VirtualTransactionIdIsValid(*old_lockholders))
+	{
+		VirtualXactLock(*old_lockholders, true);
+		old_lockholders++;
+	}
+}
+
 
 /*
  * ReindexTable
