@@ -586,7 +586,7 @@ DefineIndex(IndexStmt *stmt,
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, stmt->oldNode,
 					 indexInfo, indexColNames,
-					 accessMethodId, tablespaceId,
+					 accessMethodId, tablespaceId, InvalidOid,
 					 collationObjectId, classObjectId,
 					 coloptions, reloptions, stmt->primary,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
@@ -1680,7 +1680,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
-	concurrentOid = index_concurrent_create(indOid);
+	concurrentOid = index_concurrent_create(heapOid, indOid);
 
 	/* Build new concurrent index */
 	//call to index_concurrent_build

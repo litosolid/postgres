@@ -41,8 +41,9 @@ CATALOG(pg_index,2610) BKI_WITHOUT_OIDS BKI_SCHEMA_MACRO
 	bool		indisvalid;		/* is this index valid for use by queries? */
 	bool		indcheckxmin;	/* must we wait for xmin to be old? */
 	bool		indisready;		/* is this index ready for inserts? */
-	Oid			indconcurrentid;/* OID of former index this one uses
-								 * for its concurrent operations */
+	Oid			indconcurrentid;/* OID of former index on which this one is
+								 * based if it has been created during a
+								 * concurrent process */
 
 	/* variable-length fields start here, but we allow direct access to indkey */
 	int2vector	indkey;			/* column numbers of indexed cols, or 0 */

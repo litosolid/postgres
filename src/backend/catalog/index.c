@@ -94,6 +94,7 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 					IndexInfo *indexInfo,
 					Oid *collationOids,
 					Oid *classOids,
+					Oid concurrentId,
 					int16 *coloptions,
 					bool primary,
 					bool isexclusion,
@@ -527,6 +528,7 @@ UpdateIndexRelation(Oid indexoid,
 					IndexInfo *indexInfo,
 					Oid *collationOids,
 					Oid *classOids,
+					Oid concurrentId,
 					int16 *coloptions,
 					bool primary,
 					bool isexclusion,
@@ -607,9 +609,7 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indcheckxmin - 1] = BoolGetDatum(false);
 	/* we set isvalid and isready the same way */
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isvalid);
-	//For the time being this is set to 0 but will need to be changed once
-	//integration of concurrent creation is better.
-	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(InvalidOid);
+	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(concurrentId);
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
@@ -653,6 +653,7 @@ UpdateIndexRelation(Oid indexoid,
  * indexColNames: column names to use for index (List of char *)
  * accessMethodObjectId: OID of index AM to use
  * tableSpaceId: OID of tablespace to use
+ * concurrentOid: OID of former index that a concurrent index uses
  * collationObjectId: array of collation OIDs, one per index column
  * classObjectId: array of index opclass OIDs, one per index column
  * coloptions: array of per-index-column indoption settings
@@ -679,6 +680,7 @@ index_create(Relation heapRelation,
 			 List *indexColNames,
 			 Oid accessMethodObjectId,
 			 Oid tableSpaceId,
+			 Oid concurrentId,
 			 Oid *collationObjectId,
 			 Oid *classObjectId,
 			 int16 *coloptions,
@@ -873,8 +875,8 @@ index_create(Relation heapRelation,
 	 * ----------------
 	 */
 	UpdateIndexRelation(indexRelationId, heapRelationId, indexInfo,
-						collationObjectId, classObjectId, coloptions,
-						isprimary, is_exclusion,
+						collationObjectId, classObjectId, concurrentId,
+						coloptions, isprimary, is_exclusion,
 						!deferrable,
 						!concurrent);
 
@@ -1088,17 +1090,35 @@ index_create(Relation heapRelation,
  * on.
  */
 Oid
-index_concurrent_create(Oid indOid)
+index_concurrent_create(Oid heapOid, Oid indOid)
 {
-	Relation	iRel,
+	Relation	indexRelation,
 				heapRelation;
-	Oid			relid;
 	Oid			concurrentOid = InvalidOid;
-	IndexInfo  *indexInfo, *concurrentIndexInfo;
+	IndexInfo  *indexInfo;
+
+	/* Open and lock the parent heap relation */
+	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
+	/* And the target index relation */
+	indexRelation = index_open(indOid, RowExclusiveLock);
+
+	/*
+	 * Build index info of former index, the same information is shared
+	 * between the former index and its concurrent version.
+	 */
+	indexInfo = BuildIndexInfo(indexRelation);
 
 	//TODO create an index for concurrent operations
 	//Need to perform a correct call to index_create, relying on the
 	//same error checks and structures
+	//concurrentOid = index_create(heapRelation,
+	//							 "indexname", //TODO
+	//							 InvalidOid,
+	//					);
+
+	/* Close rels, but keep locks */
+	index_close(indexRelation, NoLock);
+	heap_close(heapRelation, NoLock);
 
 	return concurrentOid;
 }
@@ -1107,11 +1127,11 @@ index_concurrent_create(Oid indOid)
 /*
  * index_concurrent_build
  *
- * Build index for a concurrent operation. Low-level locks
- * are done when this operation is performed.
+ * Build index for a concurrent operation. Low-level locks are taken when this
+ * operation is performed.
  */
 void
-index_concurrent_build(Oid heapId,
+index_concurrent_build(Oid heapOid,
 					   Oid indexOid,
 					   bool isprimary)
 {
@@ -1120,7 +1140,7 @@ index_concurrent_build(Oid heapId,
 	IndexInfo  *indexInfo;
 
     /* Open and lock the parent heap relation */
-    rel = heap_open(heapId, ShareUpdateExclusiveLock);
+    rel = heap_open(heapOid, ShareUpdateExclusiveLock);
 
     /* And the target index relation */
     indexRelation = index_open(indexOid, RowExclusiveLock);

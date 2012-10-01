@@ -277,6 +277,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid, Datum reloptio
 				 list_make2("chunk_id", "chunk_seq"),
 				 BTREE_AM_OID,
 				 rel->rd_rel->reltablespace,
+				 InvalidOid,
 				 collationObjectId, classObjectId, coloptions, (Datum) 0,
 				 true, false, false, false,
 				 true, false, false);
