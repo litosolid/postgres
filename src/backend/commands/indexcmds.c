@@ -1581,9 +1581,13 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	Oid			heapOid = InvalidOid;
 	Oid			concurrentOid = InvalidOid;
 	char	   *concurrentName;
-	Relation	heapRelation, indexRel;
-	LockRelId	heaprelid;
-	LOCKTAG		heaplocktag;
+	Relation	heapRelation, indexRel, indexConcurrentRel;
+	LockRelId	indexLockId,
+				indexConcurrentLockId,
+				heapLockId;
+	LOCKTAG		indexLocktag,
+				indexConcurrentLocktag,
+				heapLocktag;
 	Snapshot	snapshot;
 	bool		primary;
 
@@ -1612,36 +1616,68 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 									 true);
 
 	/*
+	 * Phase 1 of REINDEX CONCURRENTLY
+	 *
 	 * Here begins the process for rebuilding concurrently the index.
 	 * We need first to create an index which is based on the same data
 	 * as the former index except that it will be only registered in catalogs
 	 * and will be built after.
 	 */
 	/* lock level used here should match index lock index_concurrent_create() */
+	indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
 	concurrentOid = index_concurrent_create(heapRelation, indOid, concurrentName);
 
-	/* save lockrelid and locktag for below, then close rel */
-	heaprelid = heapRelation->rd_lockInfo.lockRelId;
-	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
+	/* Now open the relation of concurrent index, a lock is also needed on it */
+	indexConcurrentRel = index_open(concurrentOid, ShareUpdateExclusiveLock);
+
+	/* save lockrelid and locktag for below, then close relations */
+	heapLockId = heapRelation->rd_lockInfo.lockRelId;
+	indexLockId = indexRel->rd_lockInfo.lockRelId;
+	indexConcurrentLockId = indexConcurrentRel->rd_lockInfo.lockRelId;
+	SET_LOCKTAG_RELATION(heapLocktag, heapLockId.dbId, heapLockId.relId);
+	SET_LOCKTAG_RELATION(indexLocktag, indexLockId.dbId, indexLockId.relId);
+	SET_LOCKTAG_RELATION(indexConcurrentLocktag, indexConcurrentLockId.dbId,
+						 indexConcurrentLockId.relId);
+
+	/* Clean up relations */
 	heap_close(heapRelation, NoLock);
+	index_close(indexRel, NoLock);
+	index_close(indexConcurrentRel, NoLock);
 
-	LockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
+	/*
+	 * For a concurrent build, it is necessary to make the catalog entries
+	 * visible to the other transactions before actually building the index.
+	 * This will prevent them from making incompatible HOT updates. The index
+	 * is marked as not ready and invalid so as no other transactions will try
+	 * to use it for INSERT or SELECT.
+	 *
+	 * Before committing, get a session level lock on the relation, the
+	 * concurrent index and its copy to insure that none of them are dropped
+	 * until the operation is done.
+	 */
+	LockRelationIdForSession(&heapLockId, ShareUpdateExclusiveLock);
+	LockRelationIdForSession(&indexLockId, ShareUpdateExclusiveLock);
+	LockRelationIdForSession(&indexConcurrentLockId, ShareUpdateExclusiveLock);
 
-	/* Like end of phase 1 of CREATE INDEX CONCURRENTLY */
-	//TODO refactoring and far more comments
 	PopActiveSnapshot();
 	CommitTransactionCommand();
 	StartTransactionCommand();
 
-	/* Like phase 2 of CREATE INDEX CONCURRENTLY */
-	WaitForVirtualLocks(heaplocktag);
+	/*
+	 * Phase 2 of REINDEX concurrent
+	 *
+	 * We need to wait until no running transactions could have the table open with
+	 * the old list of indexes.
+	 */
+	WaitForVirtualLocks(heapLocktag);
 
+	/* Index relation has been closed by previous commit, so reopen it */
 	indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 	primary = indexRel->rd_index->indisprimary;
 	index_close(indexRel, ShareUpdateExclusiveLock);
 
-	/* Perform concurrent build of new concurrent index */
+	/* Perform concurrent build of new index */
 	index_concurrent_build(heapOid,
 						   concurrentOid,
 						   primary);
@@ -1664,17 +1700,26 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	StartTransactionCommand();
 
 	/*
+	 * Phase 3 of REINDEX CONCURRENT
+	 *
+	 * During this phase the concurrent index catches up with the INSERT that
+	 * might have occurred in the parent table and is marked as valid once done.
+	 *
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
 	 */
-	WaitForVirtualLocks(heaplocktag);
+	WaitForVirtualLocks(heapLocktag);
 
-	/* Take the reference snapshot */
+	/*
+	 * Take the reference snapshot that will be used for the concurrent index
+	 * validation.
+	 */
 	snapshot = RegisterSnapshot(GetTransactionSnapshot());
 	PushActiveSnapshot(snapshot);
 
 	/*
-	 * Scan the index and the heap, insert any missing index entries.
+	 * Scan the concurrent index and the heap, then insert any missing index
+	 * entries.
 	 */
 	validate_index(heapOid, concurrentOid, snapshot);
 
@@ -1686,8 +1731,11 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 */
 	index_concurrent_mark(concurrentOid, INDEX_MARK_VALID);
 
-	//This needs refactoring...
-	CacheInvalidateRelcacheByRelid(heaprelid.relId);
+	/*
+	 * The pg_index update will cause backends to update its entries for the
+	 * concurrent index but it is necessary to do the same whing
+	 */
+	CacheInvalidateRelcacheByRelid(heapLockId.relId);
 
 	/* we can now do away with our active snapshot */
 	PopActiveSnapshot();
@@ -1700,39 +1748,72 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	StartTransactionCommand();
 
 	/*
-	 * Now that the concurrent index is valid and can be used,
-	 * it is necessary to swap the old and new indexes.
-	 * The concurrent index has simply to replace the index that was targetted
-	 * for rebuild.
+	 * Phase 4 of REINDEX CONCURRENTLY
+	 *
+	 * Now that the concurrent index is valid and can be used,  we need to
+	 * swap the concurrent index and the old index. The old index is marked
+	 * as invalid.
 	 */
-	//TODO: swap the old and new index.
+
+	//TODO Swap indexes
+	//This still needs to be done
+
+	/* Take reference snapshot used to wait for older snapshots */
+	snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(snapshot);
+
+	/* Wait for old snapshots */
+	WaitForOldSnapshots(snapshot);
 
 	/* Mark the old index as invalid */
 	index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
 
-	//TODO wait for other transactions to finish
+	/* we can now do away with our active snapshot */
+	PopActiveSnapshot();
+
+	/* And we can remove the validating snapshot too */
+	UnregisterSnapshot(snapshot);
+
+	/*
+	 * Commit this transaction had make old index invalidation visible.
+	 */
 	CommitTransactionCommand();
 	StartTransactionCommand();
 
-
-	//This is part of the new process and does not need refactoring, honestly
+	/*
+	 * Phase 5 of REINDEX CONCURRENTLY
+	 *
+	 * The old index needs to be marked as invalid. We need also to wait for
+	 * transactions that might use it.
+	 */
+	WaitForVirtualLocks(heapLocktag);
 
 	/* Mark the old index as not ready */
-
 	index_concurrent_mark(indOid, INDEX_MARK_NOT_READY);
-	//Drop the old index
 
-
-
-	//TODO build necessary info then launch index_create correctly
-	//Then perform a bunch of checks on visibility and transaction handling
-
-	//Then perform visibility checks, etc, etc.
+	/* we can do away with our snapshot */
+	PopActiveSnapshot();
 
 	/*
-	 * Last thing to do is release the session-level lock on the parent table.
+	 * Commit this transaction to make the indisready update visible.
 	 */
-	UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
+	CommitTransactionCommand();
+	StartTransactionCommand();
+
+	/*
+	 * Phase 6 of REINDEX CONCURRENTLY
+	 *
+	 * Drop the old index.
+	 */
+	//TODO Drop the old index
+
+	/*
+	 * Last thing to do is release the session-level lock on the parent table
+	 * and the new index.
+	 */
+	UnlockRelationIdForSession(&heapLockId, ShareUpdateExclusiveLock);
+	UnlockRelationIdForSession(&indexLockId, ShareUpdateExclusiveLock);
+	UnlockRelationIdForSession(&indexConcurrentLockId, ShareUpdateExclusiveLock);
 }
 
 /*
