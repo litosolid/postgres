@@ -1622,6 +1622,23 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	/* lock level used here should match index lock index_concurrent_create() */
 	indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
+
+	/*
+	 * Do some error checks on index and relation.
+	 * Concurrent reindex of index for exclusion constraint is not supported.
+	 */
+	if (indexRel->rd_index->indisexclusion)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("concurrent reindex is not supported for exclusion constraints")));
+
+	/* Relation on which is based index cannot be shared */
+	if (heapRelation->rd_rel->relisshared)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("concurrent reindex is not supported for shared relations")));
+
+	/* Create concurrent index based on given index */
 	concurrentOid = index_concurrent_create(heapRelation, indOid, concurrentName);
 
 	/* Now open the relation of concurrent index, a lock is also needed on it */
