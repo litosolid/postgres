@@ -586,7 +586,7 @@ DefineIndex(IndexStmt *stmt,
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, stmt->oldNode,
 					 indexInfo, indexColNames,
-					 accessMethodId, tablespaceId, InvalidOid,
+					 accessMethodId, tablespaceId,
 					 collationObjectId, classObjectId,
 					 coloptions, reloptions, stmt->primary,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,

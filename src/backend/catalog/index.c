@@ -94,7 +94,6 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 					IndexInfo *indexInfo,
 					Oid *collationOids,
 					Oid *classOids,
-					Oid concurrentId,
 					int16 *coloptions,
 					bool primary,
 					bool isexclusion,
@@ -528,7 +527,6 @@ UpdateIndexRelation(Oid indexoid,
 					IndexInfo *indexInfo,
 					Oid *collationOids,
 					Oid *classOids,
-					Oid concurrentId,
 					int16 *coloptions,
 					bool primary,
 					bool isexclusion,
@@ -609,7 +607,6 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indcheckxmin - 1] = BoolGetDatum(false);
 	/* we set isvalid and isready the same way */
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isvalid);
-	values[Anum_pg_index_indconcurrentid - 1] = ObjectIdGetDatum(concurrentId);
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
@@ -653,7 +650,6 @@ UpdateIndexRelation(Oid indexoid,
  * indexColNames: column names to use for index (List of char *)
  * accessMethodObjectId: OID of index AM to use
  * tableSpaceId: OID of tablespace to use
- * concurrentOid: OID of former index that a concurrent index uses
  * collationObjectId: array of collation OIDs, one per index column
  * classObjectId: array of index opclass OIDs, one per index column
  * coloptions: array of per-index-column indoption settings
@@ -680,7 +676,6 @@ index_create(Relation heapRelation,
 			 List *indexColNames,
 			 Oid accessMethodObjectId,
 			 Oid tableSpaceId,
-			 Oid concurrentId,
 			 Oid *collationObjectId,
 			 Oid *classObjectId,
 			 int16 *coloptions,
@@ -875,8 +870,8 @@ index_create(Relation heapRelation,
 	 * ----------------
 	 */
 	UpdateIndexRelation(indexRelationId, heapRelationId, indexInfo,
-						collationObjectId, classObjectId, concurrentId,
-						coloptions, isprimary, is_exclusion,
+						collationObjectId, classObjectId, coloptions,
+						isprimary, is_exclusion,
 						!deferrable,
 						!concurrent);
 
@@ -1141,7 +1136,6 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 								 columnNames,
 								 indexRelation->rd_rel->relam,
 								 indexRelation->rd_rel->reltablespace,
-								 indOid,
 								 indexRelation->rd_indcollation,
 								 indclass->values,
 								 indcoloptions->values,
@@ -3306,7 +3300,6 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 	index_close(iRel, NoLock);
 	heap_close(heapRelation, NoLock);
 }
-
 
 /*
  * reindex_relation - This routine is used to recreate all indexes
