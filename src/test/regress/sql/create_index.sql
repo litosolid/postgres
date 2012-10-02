@@ -912,3 +912,30 @@ ORDER BY thousand;
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand;
+
+--
+-- Check behavior of REINDEX and REINDEX CONCURRENTLY
+--
+CREATE TABLE concur_reindex_tab (c1 int, c2 text);
+-- REINDEX
+REINDEX TABLE concur_reindex_tab; -- notice
+REINDEX TABLE concur_reindex_tab CONCURRENTLY; -- notice
+CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(a);
+CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(b);
+INSERT INTO concur_reindex_tab VALUES  (1,'a');
+INSERT INTO concur_reindex_tab VALUES  (2,'a');
+REINDEX INDEX concur_reindex_tab1 CONCURRENTLY;
+REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+
+-- Check errors
+-- Cannot run inside a transaction block
+BEGIN;
+REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+COMMIT;
+REINDEX TABLE pg_database CONCURRENTLY;-- no shared relation
+REINDEX DATABASE postgres CONCURRENTLY; -- not allowed for DATABASE
+REINDEX SYSTEM postgres CONCURRENTLY; -- not allowed for SYSTEM
+
+-- Check the relation status, there should not be invalid indexes
+\d concur_reindex_tab
+DROP TABLE concur_reindex_tab;
