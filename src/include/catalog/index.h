@@ -119,7 +119,7 @@ extern void reindex_index(Oid indexId, bool skip_constraint_checks);
 #define REINDEX_REL_SUPPRESS_INDEX_USE	0x02
 #define REINDEX_REL_CHECK_CONSTRAINTS	0x04
 
-extern bool reindex_relation(Oid relid, int flags, bool concurrent);
+extern bool reindex_relation(Oid relid, int flags);
 
 extern bool ReindexIsProcessingHeap(Oid heapOid);
 extern bool ReindexIsProcessingIndex(Oid indexOid);

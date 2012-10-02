@@ -1177,9 +1177,6 @@ index_concurrent_build(Oid heapOid,
     /* And the target index relation */
     indexRelation = index_open(indexOid, RowExclusiveLock);
 
-    /* Set ActiveSnapshot since functions in the indexes may need it */
-    PushActiveSnapshot(GetTransactionSnapshot());
-
     /* We have to re-build the IndexInfo struct, since it was lost in commit */
     indexInfo = BuildIndexInfo(indexRelation);
     Assert(!indexInfo->ii_ReadyForInserts);
@@ -3329,7 +3326,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, bool concurrent)
+reindex_relation(Oid relid, int flags)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3342,17 +3339,7 @@ reindex_relation(Oid relid, int flags, bool concurrent)
 	 * to prevent schema and data changes in it.  The lock level used here
 	 * should match ReindexTable().
 	 */
-	rel = heap_open(relid, concurrent ? ShareUpdateExclusiveLock : ShareLock);
-
-	/*
-	 * Check if relation is shared, it is not allowed to perform a concurrent
-	 * operation in this case. the same check is performed in reindex_index
-	 * but it looks cleaner to do that at relation level here.
-	 */
-	if (concurrent && rel->rd_rel->relisshared)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex shared relation concurrently")));
+	rel = heap_open(relid, ShareLock);
 
 	toast_relid = rel->rd_rel->reltoastrelid;
 
@@ -3452,10 +3439,7 @@ reindex_relation(Oid relid, int flags, bool concurrent)
 	 * still hold the lock on the master table.
 	 */
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
-		result |= reindex_relation(toast_relid, flags, concurrent);
-
-	//Need to do some processing here for concurrent case using the APIs defined
-	//at index level
+		result |= reindex_relation(toast_relid, flags);
 
 	return result;
 }

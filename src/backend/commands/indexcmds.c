@@ -773,12 +773,13 @@ DefineIndex(IndexStmt *stmt,
  * Each reindexing step is done simultaneously for all the given
  * indexes.
  */
-void
+bool
 ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 {
 	Relation	heapRelation;
 	List	   *concurrentIndexIds = NIL,
-			   *indexLocks = NIL;
+			   *indexLocks = NIL,
+			   *realIndexIds = indexIds;
 	ListCell   *lc, *lc2;
 	LockRelId	heapLockId;
 	LOCKTAG		heapLocktag;
@@ -795,6 +796,21 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/* lock level used here should match index lock index_concurrent_create() */
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
 
+	/* Get the list of indexes from relation if caller has not given anything */
+	if (realIndexIds == NIL)
+	{
+		Oid toast_relid = heapRelation->rd_rel->reltoastrelid;;
+		realIndexIds = RelationGetIndexList(heapRelation);
+
+		/* If relation has a toast index, it needs to be reindexed too */
+		if (OidIsValid(toast_relid))
+			realIndexIds = lappend_oid(realIndexIds, toast_relid);
+	}
+
+	/* Definetely no indexes, so leave */
+	if (realIndexIds == NIL)
+		return false;
+
 	/* Relation on which is based index cannot be shared */
 	if (heapRelation->rd_rel->relisshared)
 		ereport(ERROR,
@@ -802,7 +818,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 				 errmsg("concurrent reindex is not supported for shared relations")));
 
 	/* Do the concurrent index creation for each index */
-	foreach(lc, indexIds)
+	foreach(lc, realIndexIds)
 	{
 		char	   *concurrentName;
 		Oid			indOid = lfirst_oid(lc);
@@ -892,7 +908,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/* Get the first element is concurrent index list */
 	lc2 = list_head(concurrentIndexIds);
 
-	foreach(lc, indexIds)
+	foreach(lc, realIndexIds)
 	{
 		Relation	indexRel;
 		Oid			indOid = lfirst_oid(lc);
@@ -999,7 +1015,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	lc2 = list_head(concurrentIndexIds);
 
 	/* Swap and mark all the indexes involved */
-	foreach(lc, indexIds)
+	foreach(lc, realIndexIds)
 	{
 		Oid			indOid = lfirst_oid(lc);
 		Oid			concurrentOid = lfirst_oid(lc2);
@@ -1038,7 +1054,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* Mark the old index as not ready */
-	foreach(lc, indexIds)
+	foreach(lc, realIndexIds)
 		index_concurrent_mark(lfirst_oid(lc), INDEX_MARK_NOT_READY);
 
 	/* we can do away with our snapshot */
@@ -1059,7 +1075,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Drop the old indexes. This needs to be done through performDeletion
 	 * or related dependencies will not be dropped.
 	 */
-	foreach(lc, indexIds)
+	foreach(lc, realIndexIds)
 		index_concurrent_drop(lfirst_oid(lc));
 
 	/*
@@ -1072,6 +1088,11 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		LockRelId lockRel = * (LockRelId *) lfirst(lc);
 		UnlockRelationIdForSession(&lockRel, ShareUpdateExclusiveLock);
 	}
+
+	/* we can do away with our snapshot */
+	PopActiveSnapshot();
+
+	return true;
 }
 
 
@@ -2090,13 +2111,16 @@ ReindexTable(RangeVar *relation, bool concurrent)
 		false, false,
 		RangeVarCallbackOwnsTable, NULL);
 
-	/* REINDEX CONCURRENTLY not supported yet */
-	if (concurrent)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex table concurrently")));
+	/* Run through the concurrent process if necessary */
+	if (concurrent && !ReindexConcurrentIndexes(heapOid, NIL))
+	{
+		ereport(NOTICE,
+				(errmsg("table \"%s\" has no indexes",
+						relation->relname)));
+		return;
+	}
 
-	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST, concurrent))
+	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST))
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
 						relation->relname)));
@@ -2218,7 +2242,7 @@ ReindexDatabase(const char *databaseName,
 		StartTransactionCommand();
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST, false))
+		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST))
 			ereport(NOTICE,
 					(errmsg("table \"%s.%s\" was reindexed",
 							get_namespace_name(get_rel_namespace(relid)),

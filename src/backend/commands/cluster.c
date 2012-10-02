@@ -1432,7 +1432,7 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
 	if (check_constraints)
 		reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
-	reindex_relation(OIDOldHeap, reindex_flags, false);
+	reindex_relation(OIDOldHeap, reindex_flags);
 
 	/* Destroy new heap with old filenode */
 	object.classId = RelationRelationId;
