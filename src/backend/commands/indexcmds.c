@@ -774,7 +774,8 @@ DefineIndex(IndexStmt *stmt,
  *
  * Process REINDEX CONCURRENTLY for given list of indexes.
  * Each reindexing step is done simultaneously for all the given
- * indexes.
+ * indexes. If no list of indexes is given by the caller, all the
+ * indexes included in the relation will be reindexed.
  */
 bool
 ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
@@ -812,7 +813,10 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 	/* Definetely no indexes, so leave */
 	if (realIndexIds == NIL)
+	{
+		heap_close(heapRelation, NoLock);
 		return false;
+	}
 
 	/* Relation on which is based index cannot be shared */
 	if (heapRelation->rd_rel->relisshared)
@@ -869,7 +873,10 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		index_close(indexConcurrentRel, NoLock);
 	}
 
-	/* Save the heap lock */
+	/*
+	 * Save the heap lock for following visibility checks with other backends
+	 * might conflict with this session.
+	 */
 	heapLockId = heapRelation->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heapLocktag, heapLockId.dbId, heapLockId.relId);
 
@@ -889,7 +896,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 */
 	LockRelationIdForSession(&heapLockId, ShareUpdateExclusiveLock);
 
-	/* Lock each index accordingly */
+	/* Lock each index and each concurrent index accordingly */
 	foreach(lc, indexLocks)
 	{
 		LockRelId lockRel = * (LockRelId *) lfirst(lc);
@@ -901,17 +908,19 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	StartTransactionCommand();
 
 	/*
-	 * Phase 2 of REINDEX concurrent
+	 * Phase 2 of REINDEX CONCURRENTLY
 	 *
 	 * We need to wait until no running transactions could have the table open with
-	 * the old list of indexes.
+	 * the old list of indexes. A concurrent build is done for each concurrent
+	 * index that will replace the old indexes. All those indexes share the same
+	 * snapshot and they are built in the same transaction.
 	 */
 	WaitForVirtualLocks(heapLocktag);
 
 	/* Set ActiveSnapshot since functions in the indexes may need it */
     PushActiveSnapshot(GetTransactionSnapshot());
 
-	/* Get the first element is concurrent index list */
+	/* Get the first element of concurrent index list */
 	lc2 = list_head(concurrentIndexIds);
 
 	foreach(lc, realIndexIds)
@@ -953,10 +962,10 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	StartTransactionCommand();
 
 	/*
-	 * Phase 3 of REINDEX CONCURRENT
+	 * Phase 3 of REINDEX CONCURRENTLY
 	 *
-	 * During this phase the concurrent index catches up with the INSERT that
-	 * might have occurred in the parent table and is marked as valid once done.
+	 * During this phase the concurrent indexes catch up with the INSERT that
+	 * might have occurred in the parent table and are marked as valid once done.
 	 *
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
@@ -964,27 +973,32 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	WaitForVirtualLocks(heapLocktag);
 
 	/*
-	 * Take the reference snapshot that will be used for the concurrent index
+	 * Take the reference snapshot that will be used for the concurrent indexes
 	 * validation.
 	 */
 	snapshot = RegisterSnapshot(GetTransactionSnapshot());
 	PushActiveSnapshot(snapshot);
 
 	/*
-	 * Scan the concurrent index and the heap, then insert any missing index
-	 * entries. Do that for each concurrent index.
+	 * Perform a scan of each concurrent index with the heap, then insert
+	 * any missing index entries.
 	 */
 	foreach(lc, concurrentIndexIds)
 		validate_index(heapOid, lfirst_oid(lc), snapshot);
-
-	/* Wait for old snapshots */
-	WaitForOldSnapshots(snapshot);
 
 	/*
 	 * Concurrent indexes can now be marked valid -- update pg_index entries
 	 */
 	foreach(lc, concurrentIndexIds)
 		index_concurrent_mark(lfirst_oid(lc), INDEX_MARK_VALID);
+
+	/*
+	 * The concurrent indexes are now valid as they contain all the tuples
+	 * necessary. However, it might not have taken into account deleted tuples
+	 * before the reference snapshot was taken, so we need to wait for the
+	 * transactions that might have older snapshots than ours.
+	 */
+	WaitForOldSnapshots(snapshot);
 
 	/*
 	 * The pg_index update will cause backends to update its entries for the
@@ -1005,22 +1019,23 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/*
 	 * Phase 4 of REINDEX CONCURRENTLY
 	 *
-	 * Now that the concurrent index is valid and can be used,  we need to
-	 * swap the concurrent index and the old index. The old index is marked
-	 * as invalid.
+	 * Now that the concurrent indexes are valid and can be used, we need to
+	 * swap each concurrent index with its corresponding old index. The old
+	 * index is marked as invalid once this is done, making it not usable
+	 * by other transactions once this transaction is committed.
 	 */
 
 	/* Take reference snapshot used to wait for older snapshots */
 	snapshot = RegisterSnapshot(GetTransactionSnapshot());
 	PushActiveSnapshot(snapshot);
 
-	/* Wait for old snapshots */
+	/* Wait for old snapshots, like previously */
 	WaitForOldSnapshots(snapshot);
 
 	/* Get the first element is concurrent index list */
 	lc2 = list_head(concurrentIndexIds);
 
-	/* Swap and mark all the indexes involved */
+	/* Swap and mark all the indexes involved in the relation */
 	foreach(lc, realIndexIds)
 	{
 		Oid			indOid = lfirst_oid(lc);
@@ -1036,7 +1051,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
 	}
 
-	/* we can now do away with our active snapshot */
+	/* We can now do away with our active snapshot */
 	PopActiveSnapshot();
 
 	/* And we can remove the validating snapshot too */
@@ -1051,7 +1066,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/*
 	 * Phase 5 of REINDEX CONCURRENTLY
 	 *
-	 * The old indexes need to be marked as invalid. We need also to wait for
+	 * The old indexes need to be marked as not ready. We need also to wait for
 	 * transactions that might use them.
 	 */
 	WaitForVirtualLocks(heapLocktag);
@@ -1059,11 +1074,11 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/* Get fresh snapshot for this step */
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	/* Mark the old index as not ready */
+	/* Mark the old indexes as not ready */
 	foreach(lc, realIndexIds)
 		index_concurrent_mark(lfirst_oid(lc), INDEX_MARK_NOT_READY);
 
-	/* we can do away with our snapshot */
+	/* We can do away with our snapshot */
 	PopActiveSnapshot();
 
 	/*
@@ -1079,7 +1094,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
 	 * Drop the old indexes. This needs to be done through performDeletion
-	 * or related dependencies will not be dropped.
+	 * or related dependencies will not be dropped for the old indexes.
 	 */
 	foreach(lc, realIndexIds)
 		index_concurrent_drop(lfirst_oid(lc));
@@ -1095,7 +1110,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		UnlockRelationIdForSession(&lockRel, ShareUpdateExclusiveLock);
 	}
 
-	/* we can do away with our snapshot */
+	/* We can do away with our snapshot */
 	PopActiveSnapshot();
 
 	return true;

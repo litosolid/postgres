@@ -1082,7 +1082,8 @@ index_create(Relation heapRelation,
  *
  * Create an index based on the given one that will be used for concurrent
  * operations. The index is inserted into catalogs and needs to be built later
- * on.
+ * on. This is called during concurrent index processing. The heap relation
+ * on which is based the index needs to be closed by the caller.
  */
 Oid
 index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
@@ -1103,13 +1104,13 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 	/* Concurrent index uses the same index information as former index */
 	indexInfo = BuildIndexInfo(indexRelation);
 
-	/* Build the list of column names */
+	/* Build the list of column names, necessary for index_create */
 	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 	{
 		AttrNumber	attnum = indexInfo->ii_KeyAttrNumbers[i];
 		Form_pg_attribute attform = heapRelation->rd_att->attrs[attnum - 1];;
 
-		/* Pick it up from the relation */
+		/* Pick up column name from the relation */
 		columnNames = lappend(columnNames, pstrdup(NameStr(attform->attname)));
 	}
 
@@ -1266,7 +1267,10 @@ index_concurrent_mark(Oid indOid, IndexMarkOperation operation)
 /*
  * index_concurrent_swap
  *
- * Replace old index by old index in a concurrent context.
+ * Replace old index by old index in a concurrent context. For the time being
+ * what is done here is switching the relation names of the indexes. If extra
+ * operations are necessary during a concurrent swap, processing should be
+ * added here.
  */
 void
 index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
