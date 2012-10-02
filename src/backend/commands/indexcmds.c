@@ -800,16 +800,17 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/* lock level used here should match index lock index_concurrent_create() */
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
 
+	/*
+	 * If relation has a toast relation, it needs to be reindexed too,
+	 * but this cannot be done concurrently.
+	 */
+	if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
+		reindex_relation(heapRelation->rd_rel->reltoastrelid,
+						 REINDEX_REL_PROCESS_TOAST);
+
 	/* Get the list of indexes from relation if caller has not given anything */
 	if (realIndexIds == NIL)
-	{
-		Oid toast_relid = heapRelation->rd_rel->reltoastrelid;;
 		realIndexIds = RelationGetIndexList(heapRelation);
-
-		/* If relation has a toast index, it needs to be reindexed too */
-		if (OidIsValid(toast_relid))
-			realIndexIds = lappend_oid(realIndexIds, toast_relid);
-	}
 
 	/* Definetely no indexes, so leave */
 	if (realIndexIds == NIL)

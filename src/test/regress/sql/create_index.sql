@@ -920,8 +920,8 @@ CREATE TABLE concur_reindex_tab (c1 int, c2 text);
 -- REINDEX
 REINDEX TABLE concur_reindex_tab; -- notice
 REINDEX TABLE concur_reindex_tab CONCURRENTLY; -- notice
-CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(a);
-CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(b);
+CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(c1);
+CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(c2);
 INSERT INTO concur_reindex_tab VALUES  (1,'a');
 INSERT INTO concur_reindex_tab VALUES  (2,'a');
 REINDEX INDEX concur_reindex_tab1 CONCURRENTLY;
