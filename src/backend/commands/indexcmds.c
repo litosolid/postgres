@@ -1577,7 +1577,7 @@ ChooseIndexColumnNames(List *indexElems)
 void
 ReindexIndex(RangeVar *indexRelation, bool concurrent)
 {
-	Oid			indOid, namespaceOid;
+	Oid			indOid;
 	Oid			heapOid = InvalidOid;
 	Oid			concurrentOid = InvalidOid;
 	char	   *concurrentName;
@@ -1585,9 +1585,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	LockRelId	indexLockId,
 				indexConcurrentLockId,
 				heapLockId;
-	LOCKTAG		indexLocktag,
-				indexConcurrentLocktag,
-				heapLocktag;
+	LOCKTAG		heapLocktag;
 	Snapshot	snapshot;
 	bool		primary;
 
@@ -1603,8 +1601,6 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 		reindex_index(indOid, false);
 		return;
 	}
-
-	namespaceOid = get_rel_namespace(heapOid);
 
 	/* Choose a relation name for concurrent index */
 	concurrentName = ChooseIndexName(get_rel_name(indOid),
@@ -1636,9 +1632,6 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	indexLockId = indexRel->rd_lockInfo.lockRelId;
 	indexConcurrentLockId = indexConcurrentRel->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heapLocktag, heapLockId.dbId, heapLockId.relId);
-	SET_LOCKTAG_RELATION(indexLocktag, indexLockId.dbId, indexLockId.relId);
-	SET_LOCKTAG_RELATION(indexConcurrentLocktag, indexConcurrentLockId.dbId,
-						 indexConcurrentLockId.relId);
 
 	/* Clean up relations */
 	heap_close(heapRelation, NoLock);
@@ -1755,15 +1748,16 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 * as invalid.
 	 */
 
-	//TODO Swap indexes
-	//This still needs to be done
-
 	/* Take reference snapshot used to wait for older snapshots */
 	snapshot = RegisterSnapshot(GetTransactionSnapshot());
 	PushActiveSnapshot(snapshot);
 
 	/* Wait for old snapshots */
 	WaitForOldSnapshots(snapshot);
+
+	/* Swap old index and its concurrent */
+	//TODO fix that
+	//index_concurrent_swap(concurrentOid, indOid);
 
 	/* Mark the old index as invalid */
 	index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
@@ -1788,6 +1782,9 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	 */
 	WaitForVirtualLocks(heapLocktag);
 
+	/* Get fresh snapshot for this step */
+	PushActiveSnapshot(GetTransactionSnapshot());
+
 	/* Mark the old index as not ready */
 	index_concurrent_mark(indOid, INDEX_MARK_NOT_READY);
 
@@ -1800,12 +1797,16 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	CommitTransactionCommand();
 	StartTransactionCommand();
 
+	/* Get fresh snapshot for next step */
+	PushActiveSnapshot(GetTransactionSnapshot());
+
 	/*
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
-	 * Drop the old index.
+	 * Drop the old index. This needs to be done through performDeletion
+	 * or related dependencies will not be dropped.
 	 */
-	//TODO Drop the old index
+	index_concurrent_drop(indOid);
 
 	/*
 	 * Last thing to do is release the session-level lock on the parent table

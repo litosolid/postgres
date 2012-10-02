@@ -72,6 +72,10 @@ extern void index_concurrent_build(Oid heapOid,
 
 extern void index_concurrent_mark(Oid indOid, IndexMarkOperation operation);
 
+extern void index_concurrent_swap(Oid indexOid1, Oid indexOid2);
+
+extern void index_concurrent_drop(Oid indexOid);
+
 extern void index_constraint_create(Relation heapRelation,
 						Oid indexRelationId,
 						IndexInfo *indexInfo,

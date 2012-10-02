@@ -1273,6 +1273,52 @@ index_concurrent_mark(Oid indOid, IndexMarkOperation operation)
 
 
 /*
+ * index_concurrent_swap
+ *
+ * Replace old index by old index in a concurrent context.
+ */
+void
+index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
+{
+	char	nameNew[NAMEDATALEN],
+			nameOld[NAMEDATALEN];
+
+	/* The old index is going to use the name of the old index */
+	snprintf(nameNew, NAMEDATALEN, "%s", get_rel_name(newIndexOid));
+
+	/* Change the name of old index to something based on relation Id */
+	snprintf(nameOld, NAMEDATALEN, "cct_%d", oldIndexOid);
+	RenameRelationInternal(oldIndexOid, nameOld);
+
+	/* Make the catalog update visible */
+	CommandCounterIncrement();
+
+	//TODO make the modification visible
+
+	/* Change the name of the new index with the old one */
+	RenameRelationInternal(newIndexOid, nameNew);
+}
+
+
+/*
+ * index_concurrent_drop
+ *
+ * Drop an index in a concurrent process. Deletion has to be done through
+ * performDeletion or dependencies of the index are not dropped.
+ */
+void
+index_concurrent_drop(Oid indexOid)
+{
+	ObjectAddress object;
+
+	object.classId = RelationRelationId;
+	object.objectId = indexOid;
+	object.objectSubId = 0;
+	performDeletion(&object, DROP_CASCADE, 0);
+}
+
+
+/*
  * index_constraint_create
  *
  * Set up a constraint associated with an index
