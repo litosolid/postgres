@@ -296,7 +296,7 @@ REINDEX { INDEX | TABLE | DATABASE | SYSTEM } <replaceable class="PARAMETER">nam
    </para>
 
    <para>
-    If a problem arises while scanning the table, such as a
+    If a problem arises while rebuilding the indexes, such as a
     uniqueness violation in a unique index, the <command>REINDEX</>
     command will fail but leave behind an <quote>invalid</> new index on top
     of the existing one. This index will be ignored for querying purposes
@@ -319,29 +319,6 @@ Indexes:
     index and try again to perform <command>REINDEX CONCURRENTLY</> once again.
     The concurrent index created during the processing has a name finishing by
     the suffix cct.
-   </para>
-
-   <para>
-    After swapping the old and fresh index, no new table scans occur but if the
-    <command>REINDEX</> command fails the old index will be defined as
-    <literal>INVALID</>:
-
-<programlisting>
-postgres=# \d tab
-       Table "public.tab"
- Column |  Type   | Modifiers
---------+---------+-----------
- col    | integer |
-Indexes:
-    "idx" btree (col)
-    "cct_16834" btree (col) INVALID
-</programlisting>
-
-    After swapping, the old index is renamed with a suffix based on the relation
-    OID on which the index is based. As previously, the recommended recovery
-    method is to drop the invalid index. It is not necessary to reuse
-    <command>REINDEX CONCURRENTLY</> as the index has already been rebuilt and
-    has been renamed with the old index name.
    </para>
 
    <para>
