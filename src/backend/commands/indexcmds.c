@@ -774,8 +774,8 @@ DefineIndex(IndexStmt *stmt,
  * Each reindexing step is done simultaneously for all the given
  * indexes.
  */
-static void
-ReindexConcurrent(Oid heapOid, List *indexIds)
+void
+ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 {
 	Relation	heapRelation;
 	List	   *concurrentIndexIds = NIL,
