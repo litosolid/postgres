@@ -676,6 +676,9 @@ DefineIndex(IndexStmt *stmt,
 	 * HOT-chain or the extension of the chain is HOT-safe for this index.
 	 */
 
+	/* Set ActiveSnapshot since functions in the indexes may need it */
+    PushActiveSnapshot(GetTransactionSnapshot());
+
 	/* Perform concurrent build of index */
 	index_concurrent_build(RangeVarGetRelid(stmt->relation, NoLock, false),
 						   indexRelationId,
@@ -904,6 +907,9 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * the old list of indexes.
 	 */
 	WaitForVirtualLocks(heapLocktag);
+
+	/* Set ActiveSnapshot since functions in the indexes may need it */
+    PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* Get the first element is concurrent index list */
 	lc2 = list_head(concurrentIndexIds);
