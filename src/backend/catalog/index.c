@@ -1277,8 +1277,8 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	char	nameNew[NAMEDATALEN],
 			nameOld[NAMEDATALEN];
 
-	/* The old index is going to use the name of the old index */
-	snprintf(nameNew, NAMEDATALEN, "%s", get_rel_name(newIndexOid));
+	/* The new index is going to use the name of the old index */
+	snprintf(nameNew, NAMEDATALEN, "%s", get_rel_name(oldIndexOid));
 
 	/* Change the name of old index to something based on relation Id */
 	snprintf(nameOld, NAMEDATALEN, "cct_%d", oldIndexOid);
@@ -1286,8 +1286,6 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 
 	/* Make the catalog update visible */
 	CommandCounterIncrement();
-
-	//TODO make the modification visible
 
 	/* Change the name of the new index with the old one */
 	RenameRelationInternal(newIndexOid, nameNew);

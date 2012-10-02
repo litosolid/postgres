@@ -1756,8 +1756,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	WaitForOldSnapshots(snapshot);
 
 	/* Swap old index and its concurrent */
-	//TODO fix that
-	//index_concurrent_swap(concurrentOid, indOid);
+	index_concurrent_swap(concurrentOid, indOid);
 
 	/* Mark the old index as invalid */
 	index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
