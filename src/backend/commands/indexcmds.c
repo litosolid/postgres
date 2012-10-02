@@ -75,7 +75,6 @@ static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 								Oid relId, Oid oldRelId, void *arg);
-static void ReindexConcurrent(Oid heapOid, List *indexIds);
 static void WaitForVirtualLocks(LOCKTAG heaplocktag);
 static void WaitForOldSnapshots(Snapshot snapshot);
 
@@ -1904,7 +1903,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	}
 
 	/* Continue through REINDEX CONCURRENTLY */
-	ReindexConcurrent(heapOid, list_make1_oid(indOid));
+	ReindexConcurrentIndexes(heapOid, list_make1_oid(indOid));
 }
 
 /*
