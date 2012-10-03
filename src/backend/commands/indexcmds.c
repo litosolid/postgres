@@ -677,7 +677,7 @@ DefineIndex(IndexStmt *stmt,
 	 */
 
 	/* Set ActiveSnapshot since functions in the indexes may need it */
-    PushActiveSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* Perform concurrent build of index */
 	index_concurrent_build(RangeVarGetRelid(stmt->relation, NoLock, false),
@@ -919,7 +919,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	WaitForVirtualLocks(heapLocktag);
 
 	/* Set ActiveSnapshot since functions in the indexes may need it */
-    PushActiveSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* Get the first element of concurrent index list */
 	lc2 = list_head(concurrentIndexIds);

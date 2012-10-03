@@ -1094,7 +1094,7 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 	List	   *columnNames = NIL;
 	int			i;
 	HeapTuple	indexTuple;
-	Datum       indclassDatum, indoptionDatum;
+	Datum		indclassDatum, indoptionDatum;
 	oidvector  *indclass;
 	int2vector *indcoloptions;
 	bool		isnull;
@@ -1116,16 +1116,16 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 
 	/* Get the array of class and column options IDs from index info */
 	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indOid));
-    if (!HeapTupleIsValid(indexTuple))
-        elog(ERROR, "cache lookup failed for index %u", indOid);
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indOid);
 	indclassDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
-                                    Anum_pg_index_indclass, &isnull);
-    Assert(!isnull);
-    indclass = (oidvector *) DatumGetPointer(indclassDatum);
+									Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) DatumGetPointer(indclassDatum);
 
 	indoptionDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
 									 Anum_pg_index_indoption, &isnull);
-    Assert(!isnull);
+	Assert(!isnull);
 	indcoloptions = (int2vector *) DatumGetPointer(indoptionDatum);
 
 	/* Now create the concurrent index */
@@ -1172,24 +1172,24 @@ index_concurrent_build(Oid heapOid,
 				indexRelation;
 	IndexInfo  *indexInfo;
 
-    /* Open and lock the parent heap relation */
-    rel = heap_open(heapOid, ShareUpdateExclusiveLock);
+	/* Open and lock the parent heap relation */
+	rel = heap_open(heapOid, ShareUpdateExclusiveLock);
 
-    /* And the target index relation */
-    indexRelation = index_open(indexOid, RowExclusiveLock);
+	/* And the target index relation */
+	indexRelation = index_open(indexOid, RowExclusiveLock);
 
-    /* We have to re-build the IndexInfo struct, since it was lost in commit */
-    indexInfo = BuildIndexInfo(indexRelation);
-    Assert(!indexInfo->ii_ReadyForInserts);
-    indexInfo->ii_Concurrent = true;
-    indexInfo->ii_BrokenHotChain = false;
+	/* We have to re-build the IndexInfo struct, since it was lost in commit */
+	indexInfo = BuildIndexInfo(indexRelation);
+	Assert(!indexInfo->ii_ReadyForInserts);
+	indexInfo->ii_Concurrent = true;
+	indexInfo->ii_BrokenHotChain = false;
 
-    /* Now build the index */
-    index_build(rel, indexRelation, indexInfo, isprimary, false);
+	/* Now build the index */
+	index_build(rel, indexRelation, indexInfo, isprimary, false);
 
-    /* Close both the relations, but keep the locks */
-    heap_close(rel, NoLock);
-    index_close(indexRelation, NoLock);
+	/* Close both the relations, but keep the locks */
+	heap_close(rel, NoLock);
+	index_close(indexRelation, NoLock);
 }
 
 
