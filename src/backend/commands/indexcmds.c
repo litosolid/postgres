@@ -1097,8 +1097,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Drop the old indexes. This needs to be done through performDeletion
 	 * or related dependencies will not be dropped for the old indexes.
 	 */
-	foreach(lc, realIndexIds)
-		index_concurrent_drop(lfirst_oid(lc));
+	index_concurrent_drop(realIndexIds);
 
 	/*
 	 * Last thing to do is release the session-level lock on the parent table
