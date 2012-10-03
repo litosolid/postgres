@@ -1296,7 +1296,7 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	/* Make the catalog update visible */
 	CommandCounterIncrement();
 
-	/* Finally change the name of old index with name of the new one*/
+	/* Finally change the name of old index with name of the new one */
 	RenameRelationInternal(oldIndexOid, nameNew);
 
 	/* Make the catalog update visible */
