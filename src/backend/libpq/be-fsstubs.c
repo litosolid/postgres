@@ -56,7 +56,9 @@
  */
 bool		lo_compat_privileges;
 
-/*#define FSDB 1*/
+/* define this to enable debug logging */
+/* #define FSDB 1 */
+/* chunk size for lo_import/lo_export transfers */
 #define BUFSIZE			8192
 
 /*
@@ -209,14 +211,13 @@ lo_write(int fd, const char *buf, int len)
 	return status;
 }
 
-
 Datum
 lo_lseek(PG_FUNCTION_ARGS)
 {
 	int32		fd = PG_GETARG_INT32(0);
 	int32		offset = PG_GETARG_INT32(1);
 	int32		whence = PG_GETARG_INT32(2);
-	int			status;
+	int64		status;
 
 	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
 		ereport(ERROR,
@@ -225,7 +226,32 @@ lo_lseek(PG_FUNCTION_ARGS)
 
 	status = inv_seek(cookies[fd], offset, whence);
 
-	PG_RETURN_INT32(status);
+	/* guard against result overflow */
+	if (status != (int32) status)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("lo_lseek result out of range for large-object descriptor %d",
+						fd)));
+
+	PG_RETURN_INT32((int32) status);
+}
+
+Datum
+lo_lseek64(PG_FUNCTION_ARGS)
+{
+	int32		fd = PG_GETARG_INT32(0);
+	int64		offset = PG_GETARG_INT64(1);
+	int32		whence = PG_GETARG_INT32(2);
+	int64		status;
+
+	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("invalid large-object descriptor: %d", fd)));
+
+	status = inv_seek(cookies[fd], offset, whence);
+
+	PG_RETURN_INT64(status);
 }
 
 Datum
@@ -264,13 +290,39 @@ Datum
 lo_tell(PG_FUNCTION_ARGS)
 {
 	int32		fd = PG_GETARG_INT32(0);
+	int64		offset;
 
 	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("invalid large-object descriptor: %d", fd)));
 
-	PG_RETURN_INT32(inv_tell(cookies[fd]));
+	offset = inv_tell(cookies[fd]);
+
+	/* guard against result overflow */
+	if (offset != (int32) offset)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("lo_tell result out of range for large-object descriptor %d",
+						fd)));
+
+	PG_RETURN_INT32((int32) offset);
+}
+
+Datum
+lo_tell64(PG_FUNCTION_ARGS)
+{
+	int32		fd = PG_GETARG_INT32(0);
+	int64		offset;
+
+	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("invalid large-object descriptor: %d", fd)));
+
+	offset = inv_tell(cookies[fd]);
+
+	PG_RETURN_INT64(offset);
 }
 
 Datum
@@ -511,6 +563,33 @@ lo_truncate(PG_FUNCTION_ARGS)
 {
 	int32		fd = PG_GETARG_INT32(0);
 	int32		len = PG_GETARG_INT32(1);
+
+	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("invalid large-object descriptor: %d", fd)));
+
+	/* Permission checks */
+	if (!lo_compat_privileges &&
+		pg_largeobject_aclcheck_snapshot(cookies[fd]->id,
+										 GetUserId(),
+										 ACL_UPDATE,
+									   cookies[fd]->snapshot) != ACLCHECK_OK)
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for large object %u",
+						cookies[fd]->id)));
+
+	inv_truncate(cookies[fd], len);
+
+	PG_RETURN_INT32(0);
+}
+
+Datum
+lo_truncate64(PG_FUNCTION_ARGS)
+{
+	int32		fd = PG_GETARG_INT32(0);
+	int64		len = PG_GETARG_INT64(1);
 
 	if (fd < 0 || fd >= cookies_size || cookies[fd] == NULL)
 		ereport(ERROR,

@@ -1,14 +1,14 @@
 /*-------------------------------------------------------------------------
  *
- * testlo.c
- *	  test using large objects with libpq
+ * testlo64.c
+ *	  test using large objects with libpq using 64-bit APIs
  *
  * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
  * IDENTIFICATION
- *	  src/test/examples/testlo.c
+ *	  src/test/examples/testlo64.c
  *
  *-------------------------------------------------------------------------
  */
@@ -75,7 +75,7 @@ importFile(PGconn *conn, char *filename)
 }
 
 static void
-pickout(PGconn *conn, Oid lobjId, int start, int len)
+pickout(PGconn *conn, Oid lobjId, pg_int64 start, int len)
 {
 	int			lobj_fd;
 	char	   *buf;
@@ -86,7 +86,12 @@ pickout(PGconn *conn, Oid lobjId, int start, int len)
 	if (lobj_fd < 0)
 		fprintf(stderr, "cannot open large object %u", lobjId);
 
-	lo_lseek(conn, lobj_fd, start, SEEK_SET);
+	if (lo_lseek64(conn, lobj_fd, start, SEEK_SET) < 0)
+		fprintf(stderr, "error in lo_lseek64: %s", PQerrorMessage(conn));
+
+	if (lo_tell64(conn, lobj_fd) != start)
+		fprintf(stderr, "error in lo_tell64: %s", PQerrorMessage(conn));
+
 	buf = malloc(len + 1);
 
 	nread = 0;
@@ -105,7 +110,7 @@ pickout(PGconn *conn, Oid lobjId, int start, int len)
 }
 
 static void
-overwrite(PGconn *conn, Oid lobjId, int start, int len)
+overwrite(PGconn *conn, Oid lobjId, pg_int64 start, int len)
 {
 	int			lobj_fd;
 	char	   *buf;
@@ -117,7 +122,9 @@ overwrite(PGconn *conn, Oid lobjId, int start, int len)
 	if (lobj_fd < 0)
 		fprintf(stderr, "cannot open large object %u", lobjId);
 
-	lo_lseek(conn, lobj_fd, start, SEEK_SET);
+	if (lo_lseek64(conn, lobj_fd, start, SEEK_SET) < 0)
+		fprintf(stderr, "error in lo_lseek64: %s", PQerrorMessage(conn));
+
 	buf = malloc(len + 1);
 
 	for (i = 0; i < len; i++)
@@ -137,6 +144,21 @@ overwrite(PGconn *conn, Oid lobjId, int start, int len)
 	}
 	free(buf);
 	fprintf(stderr, "\n");
+	lo_close(conn, lobj_fd);
+}
+
+static void
+my_truncate(PGconn *conn, Oid lobjId, pg_int64 len)
+{
+	int			lobj_fd;
+
+	lobj_fd = lo_open(conn, lobjId, INV_READ | INV_WRITE);
+	if (lobj_fd < 0)
+		fprintf(stderr, "cannot open large object %u", lobjId);
+
+	if (lo_truncate64(conn, lobj_fd, len) < 0)
+		fprintf(stderr, "error in lo_truncate64: %s", PQerrorMessage(conn));
+
 	lo_close(conn, lobj_fd);
 }
 
@@ -202,15 +224,16 @@ int
 main(int argc, char **argv)
 {
 	char	   *in_filename,
-			   *out_filename;
+			   *out_filename,
+			   *out_filename2;
 	char	   *database;
 	Oid			lobjOid;
 	PGconn	   *conn;
 	PGresult   *res;
 
-	if (argc != 4)
+	if (argc != 5)
 	{
-		fprintf(stderr, "Usage: %s database_name in_filename out_filename\n",
+		fprintf(stderr, "Usage: %s database_name in_filename out_filename out_filename2\n",
 				argv[0]);
 		exit(1);
 	}
@@ -218,6 +241,7 @@ main(int argc, char **argv)
 	database = argv[1];
 	in_filename = argv[2];
 	out_filename = argv[3];
+	out_filename2 = argv[4];
 
 	/*
 	 * set up the connection
@@ -243,15 +267,22 @@ main(int argc, char **argv)
 	{
 		printf("\tas large object %u.\n", lobjOid);
 
-		printf("picking out bytes 1000-2000 of the large object\n");
-		pickout(conn, lobjOid, 1000, 1000);
+		printf("picking out bytes 4294967000-4294968000 of the large object\n");
+		pickout(conn, lobjOid, 4294967000U, 1000);
 
-		printf("overwriting bytes 1000-2000 of the large object with X's\n");
-		overwrite(conn, lobjOid, 1000, 1000);
+		printf("overwriting bytes 4294967000-4294968000 of the large object with X's\n");
+		overwrite(conn, lobjOid, 4294967000U, 1000);
 
 		printf("exporting large object to file \"%s\" ...\n", out_filename);
 /*		exportFile(conn, lobjOid, out_filename); */
 		if (lo_export(conn, lobjOid, out_filename) < 0)
+			fprintf(stderr, "%s\n", PQerrorMessage(conn));
+
+		printf("truncating to 3294968000 bytes\n");
+		my_truncate(conn, lobjOid, 3294968000U);
+
+		printf("exporting truncated large object to file \"%s\" ...\n", out_filename2);
+		if (lo_export(conn, lobjOid, out_filename2) < 0)
 			fprintf(stderr, "%s\n", PQerrorMessage(conn));
 	}
 
