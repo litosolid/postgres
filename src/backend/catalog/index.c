@@ -1098,11 +1098,35 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 	oidvector  *indclass;
 	int2vector *indcoloptions;
 	bool		isnull;
+	bool		isconstraint;
+	bool		initdeferred = false;
+	Oid			constraintOid = get_index_constraint(indOid);
 
 	indexRelation = index_open(indOid, RowExclusiveLock);
 
 	/* Concurrent index uses the same index information as former index */
 	indexInfo = BuildIndexInfo(indexRelation);
+
+	/*
+	 * Determine if index is initdeferred, this depends on its dependent
+	 * constraint.
+	 */
+	if (OidIsValid(constraintOid))
+	{
+		/* Look for the correct value */
+		HeapTuple			constTuple;
+		Form_pg_constraint	constraint;
+
+		constTuple = SearchSysCache1(CONSTROID,
+									 ObjectIdGetDatum(constraintOid));
+		if (!HeapTupleIsValid(constTuple))
+			elog(ERROR, "cache lookup failed for constraint %u",
+				 constraintOid);
+		constraint = (Form_pg_constraint) GETSTRUCT(constTuple);
+		initdeferred = constraint->condeferred;
+
+		ReleaseSysCache(constTuple);
+	}
 
 	/* Build the list of column names, necessary for index_create */
 	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
@@ -1113,6 +1137,14 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 		/* Pick up column name from the relation */
 		columnNames = lappend(columnNames, pstrdup(NameStr(attform->attname)));
 	}
+
+	/*
+	 * Index is considered as a constraint if it is UNIQUE, PRIMARY or
+	 * EXCLUSION.
+	 */
+	isconstraint = indexRelation->rd_index->indisunique ||
+		indexRelation->rd_index->indisprimary ||
+		indexRelation->rd_index->indisexclusion;
 
 	/* Get the array of class and column options IDs from index info */
 	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indOid));
@@ -1142,9 +1174,9 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 								 indcoloptions->values,
 								 (Datum) indexRelation->rd_options, // This needs to be checked
 								 indexRelation->rd_index->indisprimary,
-								 false,	/* is constraint? */
-								 false,	/* is deferrable? */
-								 false,	/* is initially deferred? */
+								 isconstraint,	/* is constraint? */
+								 !indexRelation->rd_index->indimmediate,	/* is deferrable? */
+								 initdeferred,	/* is initially deferred? */
 								 false,	/* allow table to be a system catalog? */
 								 true,	/* skip build? */
 								 true); /* concurrent? */
