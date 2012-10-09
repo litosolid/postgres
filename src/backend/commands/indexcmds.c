@@ -783,7 +783,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	Relation	heapRelation;
 	List	   *concurrentIndexIds = NIL,
 			   *indexLocks = NIL,
-			   *realIndexIds = indexIds;
+			   *realIndexIds = NIL;
 	ListCell   *lc, *lc2;
 	LockRelId	heapLockId;
 	LOCKTAG		heapLocktag;
@@ -808,9 +808,55 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		reindex_relation(heapRelation->rd_rel->reltoastrelid,
 						 REINDEX_REL_PROCESS_TOAST);
 
-	/* Get the list of indexes from relation if caller has not given anything */
-	if (realIndexIds == NIL)
-		realIndexIds = RelationGetIndexList(heapRelation);
+	/*
+	 * Get the list of indexes from relation if caller has not given anything
+	 * Invalid indexes cannot be reindexed concurrently. Such indexes are simply
+	 * bypassed if caller has not specified anything.
+	 */
+	if (indexIds == NIL)
+	{
+		ListCell   *cell;
+		foreach(cell, RelationGetIndexList(heapRelation))
+		{
+			Oid			cellOid = lfirst_oid(cell);
+			Relation	indexRelation = index_open(cellOid, ShareUpdateExclusiveLock);
+
+			if (!indexRelation->rd_index->indisvalid)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot reindex concurrently invalid index \"%s.%s\"",
+								get_namespace_name(get_rel_namespace(cellOid)),
+								get_rel_name(cellOid))));
+
+			index_close(indexRelation, ShareUpdateExclusiveLock);
+			realIndexIds = lappend_oid(realIndexIds, cellOid);
+		}
+	}
+	else
+	{
+		ListCell   *cell;
+		List	   *filteredList = NIL;
+		foreach(cell, indexIds)
+		{
+			Oid			cellOid = lfirst_oid(cell);
+			Relation	indexRelation = index_open(cellOid, ShareUpdateExclusiveLock);
+
+			/* Invalid indexes are not reindexed */
+			if (!indexRelation->rd_index->indisvalid)
+				ereport(WARNING,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot reindex concurrently invalid index \"%s.%s\","
+								"bypassing",
+								get_namespace_name(get_rel_namespace(cellOid)),
+								get_rel_name(cellOid))));
+			else
+				filteredList = lappend_oid(filteredList, cellOid);
+
+			/* Close relation */
+			index_close(indexRelation, ShareUpdateExclusiveLock);
+		}
+		realIndexIds = filteredList;
+	}
 
 	/* Definetely no indexes, so leave */
 	if (realIndexIds == NIL)
