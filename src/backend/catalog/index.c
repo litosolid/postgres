@@ -686,7 +686,8 @@ index_create(Relation heapRelation,
 			 bool initdeferred,
 			 bool allow_system_table_mods,
 			 bool skip_build,
-			 bool concurrent)
+			 bool concurrent,
+			 bool is_reindex)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
 	Relation	pg_class;
@@ -722,17 +723,20 @@ index_create(Relation heapRelation,
 
 	if (!allow_system_table_mods &&
 		IsSystemRelation(heapRelation) &&
-		IsNormalProcessingMode())
+		IsNormalProcessingMode() &&
+		!is_reindex)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("user-defined indexes on system catalog tables are not supported")));
 
 	/*
 	 * concurrent index build on a system catalog is unsafe because we tend to
-	 * release locks before committing in catalogs
+	 * release locks before committing in catalogs. If the index is created during
+	 * a REINDEX CONCURRENTLY operation, sufficient locks are already taken.
 	 */
 	if (concurrent &&
-		IsSystemRelation(heapRelation))
+		IsSystemRelation(heapRelation) &&
+		!is_reindex)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("concurrent index creation on system catalog tables is not supported")));
@@ -741,7 +745,7 @@ index_create(Relation heapRelation,
 	 * This case is currently not supported, but there's no way to ask for it
 	 * in the grammar anyway, so it can't happen.
 	 */
-	if (concurrent && is_exclusion)
+	if (concurrent && is_exclusion && !is_reindex)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg_internal("concurrent index creation for exclusion constraints is not supported")));
@@ -1177,9 +1181,10 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 								 isconstraint,	/* is constraint? */
 								 !indexRelation->rd_index->indimmediate,	/* is deferrable? */
 								 initdeferred,	/* is initially deferred? */
-								 false,	/* allow table to be a system catalog? */
+								 true,	/* allow table to be a system catalog? */
 								 true,	/* skip build? */
-								 true); /* concurrent? */
+								 true,	/* concurrent? */
+								 true); /* reindex? */
 
 	/* Close the relations used and clean up */
 	index_close(indexRelation, RowExclusiveLock);

@@ -592,7 +592,7 @@ DefineIndex(IndexStmt *stmt,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
 					 allowSystemTableMods,
 					 skip_build || stmt->concurrent,
-					 stmt->concurrent);
+					 stmt->concurrent, false);
 
 	/* Add any requested comment */
 	if (stmt->idxcomment != NULL)
@@ -895,10 +895,14 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		Oid			indOid = lfirst_oid(lc);
 		Oid			concurrentOid = InvalidOid;
 		Relation	indexRel,
+					indexParentRel,
 					indexConcurrentRel;
 		LockRelId	lockrelid;
 
 		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
+		/* Open the index parent relation, might be a toast or parent relation */
+		indexParentRel = heap_open(indexRel->rd_index->indrelid,
+								   ShareUpdateExclusiveLock);
 
 		/* Choose a relation name for concurrent index */
 		concurrentName = ChooseIndexName(get_rel_name(indOid),
@@ -910,7 +914,9 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 										 true);
 
 		/* Create concurrent index based on given index */
-		concurrentOid = index_concurrent_create(heapRelation, indOid, concurrentName);
+		concurrentOid = index_concurrent_create(indexParentRel,
+												indOid,
+												concurrentName);
 
 		/* Now open the relation of concurrent index, a lock is also needed on it */
 		indexConcurrentRel = index_open(concurrentOid, ShareUpdateExclusiveLock);
@@ -929,6 +935,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 		index_close(indexRel, NoLock);
 		index_close(indexConcurrentRel, NoLock);
+		heap_close(indexParentRel, NoLock);
 	}
 
 	/*

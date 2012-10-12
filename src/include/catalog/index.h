@@ -59,7 +59,8 @@ extern Oid index_create(Relation heapRelation,
 			 bool initdeferred,
 			 bool allow_system_table_mods,
 			 bool skip_build,
-			 bool concurrent);
+			 bool concurrent,
+			 bool is_reindex);
 
 extern Oid index_concurrent_create(Relation heapRelation,
 								   Oid indOid,
