@@ -770,7 +770,7 @@ DefineIndex(IndexStmt *stmt,
 
 
 /*
- * ReindexConcurrent
+ * ReindexConcurrentIndexes
  *
  * Process REINDEX CONCURRENTLY for given list of indexes.
  * Each reindexing step is done simultaneously for all the given
@@ -801,14 +801,6 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
 
 	/*
-	 * If relation has a toast relation, it needs to be reindexed too,
-	 * but this cannot be done concurrently.
-	 */
-	if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
-		reindex_relation(heapRelation->rd_rel->reltoastrelid,
-						 REINDEX_REL_PROCESS_TOAST);
-
-	/*
 	 * Get the list of indexes from relation if caller has not given anything
 	 * Invalid indexes cannot be reindexed concurrently. Such indexes are simply
 	 * bypassed if caller has not specified anything.
@@ -830,6 +822,31 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 			index_close(indexRelation, ShareUpdateExclusiveLock);
 			realIndexIds = lappend_oid(realIndexIds, cellOid);
+		}
+
+		/* Add also the toast indexes */
+		if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
+		{
+			Oid			toastOid = heapRelation->rd_rel->reltoastrelid;
+			Relation	toastRelation = heap_open(toastOid, ShareUpdateExclusiveLock);
+
+			foreach(cell, RelationGetIndexList(toastRelation))
+			{
+				Oid			cellOid = lfirst_oid(cell);
+				Relation	indexRelation = index_open(cellOid, ShareUpdateExclusiveLock);
+
+				if (!indexRelation->rd_index->indisvalid)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot reindex concurrently invalid index \"%s.%s\"",
+									get_namespace_name(get_rel_namespace(cellOid)),
+									get_rel_name(cellOid))));
+
+				index_close(indexRelation, ShareUpdateExclusiveLock);
+				realIndexIds = lappend_oid(realIndexIds, cellOid);
+			}
+
+			heap_close(toastRelation, ShareUpdateExclusiveLock);
 		}
 	}
 	else
@@ -883,15 +900,9 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 
-		/* Concurrent reindex of index for exclusion constraint is not supported. */
-		if (indexRel->rd_index->indisexclusion)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("concurrent reindex is not supported for exclusion constraints")));
-
 		/* Choose a relation name for concurrent index */
 		concurrentName = ChooseIndexName(get_rel_name(indOid),
-										 get_rel_namespace(heapOid),
+										 get_rel_namespace(indexRel->rd_index->indrelid),
 										 NULL,
 										 false,
 										 false,
@@ -986,7 +997,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		index_close(indexRel, ShareUpdateExclusiveLock);
 
 		/* Perform concurrent build of new index */
-		index_concurrent_build(heapOid,
+		index_concurrent_build(indexRel->rd_index->indrelid,
 							   concurrentOid,
 							   primary);
 
@@ -1031,7 +1042,16 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * any missing index entries.
 	 */
 	foreach(lc, concurrentIndexIds)
-		validate_index(heapOid, lfirst_oid(lc), snapshot);
+	{
+		Oid indOid = lfirst_oid(lc);
+		Oid relOid;
+		Relation indexRelation = index_open(indOid, ShareUpdateExclusiveLock);
+		relOid = indexRelation->rd_index->indrelid;
+		index_close(indexRelation, ShareUpdateExclusiveLock);
+
+		/* Validate index, which might be a toast */
+		validate_index(relOid, lfirst_oid(lc), snapshot);
+	}
 
 	/*
 	 * Concurrent indexes can now be marked valid -- update pg_index entries
