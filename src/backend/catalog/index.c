@@ -1350,11 +1350,15 @@ index_concurrent_drop(List *indexIds)
 
 	Assert(indexIds != NIL);
 
-	/* Scan the list of indexes and build object list */
+	/* Scan the list of indexes and build object list for normal indexes */
 	foreach(lc, indexIds)
 	{
 		Oid				indexOid = lfirst_oid(lc);
 		ObjectAddress	object;
+
+		/* Indexes with constraints cannot be dropped this way */
+		if (OidIsValid(get_index_constraint(indexOid)))
+			continue;
 
 		object.classId = RelationRelationId;
 		object.objectId = indexOid;
@@ -1364,8 +1368,12 @@ index_concurrent_drop(List *indexIds)
 		add_exact_object_address(&object, objects);
 	}
 
-	/* Perform deletion */
+	/* Perform deletion for normal indexes */
 	performMultipleDeletions(objects, DROP_CASCADE, 0);
+
+	//TODO
+	//Perform deletion for constraint indexes
+	//Call AlterTableInternal?
 }
 
 
