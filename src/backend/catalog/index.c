@@ -664,6 +664,10 @@ UpdateIndexRelation(Oid indexoid,
  * concurrent: if true, do not lock the table against writers.	The index
  *		will be marked "invalid" and the caller must take additional steps
  *		to fix it up.
+ * is_reindex: if true, create an index that is used as a duplicate of an
+ *		existing index created during a concurrent operation. This index can
+ *		also be a toast relation. Sufficient locks are normally taken on
+ *		the related relations once this is called during a concurrent operation.
  *
  * Returns the OID of the created index.
  */
@@ -743,7 +747,9 @@ index_create(Relation heapRelation,
 
 	/*
 	 * This case is currently not supported, but there's no way to ask for it
-	 * in the grammar anyway, so it can't happen.
+	 * in the grammar anyway, so it can't happen. This might be called during a
+	 * conccurrent reindex operation, in this case sufficient locks are already
+	 * taken on the related relations.
 	 */
 	if (concurrent && is_exclusion && !is_reindex)
 		ereport(ERROR,
@@ -1143,7 +1149,7 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 	}
 
 	/*
-	 * Index is considered as a constraint if it is UNIQUE, PRIMARY or
+	 * Index is considered as a constraint if it is UNIQUE, PRIMARY  KEY or
 	 * EXCLUSION.
 	 */
 	isconstraint = indexRelation->rd_index->indisunique ||
@@ -1176,7 +1182,7 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
 								 indexRelation->rd_indcollation,
 								 indclass->values,
 								 indcoloptions->values,
-								 (Datum) indexRelation->rd_options, // This needs to be checked
+								 (Datum) indexRelation->rd_options,
 								 indexRelation->rd_index->indisprimary,
 								 isconstraint,	/* is constraint? */
 								 !indexRelation->rd_index->indimmediate,	/* is deferrable? */
@@ -1198,7 +1204,7 @@ index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
  * index_concurrent_build
  *
  * Build index for a concurrent operation. Low-level locks are taken when this
- * operation is performed.
+ * operation is performed to prevent only schema changes.
  */
 void
 index_concurrent_build(Oid heapOid,

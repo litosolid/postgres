@@ -792,12 +792,18 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	/*
 	 * Phase 1 of REINDEX CONCURRENTLY
 	 *
-	 * Here begins the process for rebuilding concurrently the index.
+	 * Here begins the process for rebuilding concurrently the indexes.
 	 * We need first to create an index which is based on the same data
 	 * as the former index except that it will be only registered in catalogs
-	 * and will be built after.
+	 * and will be built after. It is possible to perform all the operations
+	 * on all the indexes at the same time for a parent relation including
+	 * its indexes for toast relation.
 	 */
-	/* lock level used here should match index lock index_concurrent_create() */
+
+	/*
+	 * Lock level used here should match index lock index_concurrent_create(),
+	 * this prevents schema changes on the relation.
+	 */
 	heapRelation = heap_open(heapOid, ShareUpdateExclusiveLock);
 
 	/*
@@ -862,8 +868,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 			if (!indexRelation->rd_index->indisvalid)
 				ereport(WARNING,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot reindex concurrently invalid index \"%s.%s\","
-								"bypassing",
+						 errmsg("cannot reindex concurrently invalid index \"%s.%s\", bypassing",
 								get_namespace_name(get_rel_namespace(cellOid)),
 								get_rel_name(cellOid))));
 			else
@@ -1096,7 +1101,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Now that the concurrent indexes are valid and can be used, we need to
 	 * swap each concurrent index with its corresponding old index. The old
 	 * index is marked as invalid once this is done, making it not usable
-	 * by other transactions once this transaction is committed.
+	 * by other backends once this transaction is committed.
 	 */
 
 	/* Take reference snapshot used to wait for older snapshots */
