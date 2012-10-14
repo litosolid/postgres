@@ -1386,8 +1386,10 @@ index_concurrent_drop(List *indexIds)
 		add_exact_object_address(&object, objects);
 	}
 
-	/* Perform deletion for normal indexes */
-	performMultipleDeletions(objects, DROP_CASCADE, 0);
+	/* Perform deletion for normal and toast indexes */
+	performMultipleDeletions(objects,
+							 PERFORM_DELETION_CONCURRENTLY,
+							 0);
 }
 
 
