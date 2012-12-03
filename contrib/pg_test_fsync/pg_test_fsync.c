@@ -25,7 +25,7 @@
 
 #define LABEL_FORMAT		"        %-32s"
 #define NA_FORMAT			"%18s"
-#define OPS_FORMAT			"%9.3f ops/sec (%6.f microsecs/op)"
+#define OPS_FORMAT			"%9.3f ops/sec (%6.0f microsecs/op)"
 #define USECS_SEC			1000000
 
 /* These are macros to avoid timing the function call overhead. */
@@ -140,6 +140,7 @@ handle_args(int argc, char *argv[])
 		{"secs-per-test", required_argument, NULL, 's'},
 		{NULL, 0, NULL, 0}
 	};
+
 	int			option;			/* Command line option */
 	int			optindex = 0;	/* used by getopt_long */
 

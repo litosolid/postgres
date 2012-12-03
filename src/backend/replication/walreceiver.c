@@ -39,9 +39,9 @@
 #include <unistd.h>
 
 #include "access/xlog_internal.h"
+#include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
-#include "replication/walprotocol.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
@@ -55,6 +55,7 @@
 
 /* GUC variables */
 int			wal_receiver_status_interval;
+int			wal_receiver_timeout;
 bool		hot_standby_feedback;
 
 /* libpqreceiver hooks to these when loaded */
@@ -92,8 +93,8 @@ static struct
 	XLogRecPtr	Flush;			/* last byte + 1 flushed in the standby */
 }	LogstreamResult;
 
-static StandbyReplyMessage reply_message;
-static StandbyHSFeedbackMessage feedback_message;
+static StringInfoData	reply_message;
+static StringInfoData	incoming_message;
 
 /*
  * About SIGTERM handling:
@@ -121,7 +122,7 @@ static void WalRcvDie(int code, Datum arg);
 static void XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len);
 static void XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr);
 static void XLogWalRcvFlush(bool dying);
-static void XLogWalRcvSendReply(void);
+static void XLogWalRcvSendReply(bool force, bool requestReply);
 static void XLogWalRcvSendHSFeedback(void);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
 
@@ -170,9 +171,10 @@ WalReceiverMain(void)
 {
 	char		conninfo[MAXCONNINFO];
 	XLogRecPtr	startpoint;
-
 	/* use volatile pointer to prevent code rearrangement */
 	volatile WalRcvData *walrcv = WalRcv;
+	TimestampTz last_recv_timestamp;
+	bool		ping_sent;
 
 	/*
 	 * WalRcv should be set up already (if we are a backend, we inherit this
@@ -277,10 +279,14 @@ WalReceiverMain(void)
 	walrcv_connect(conninfo, startpoint);
 	DisableWalRcvImmediateExit();
 
-	/* Initialize LogstreamResult, reply_message and feedback_message */
+	/* Initialize LogstreamResult and buffers for processing messages */
 	LogstreamResult.Write = LogstreamResult.Flush = GetXLogReplayRecPtr(NULL);
-	MemSet(&reply_message, 0, sizeof(reply_message));
-	MemSet(&feedback_message, 0, sizeof(feedback_message));
+	initStringInfo(&reply_message);
+	initStringInfo(&incoming_message);
+
+	/* Initialize the last recv timestamp */
+	last_recv_timestamp = GetCurrentTimestamp();
+	ping_sent = false;
 
 	/* Loop until end-of-streaming or error */
 	for (;;)
@@ -316,15 +322,23 @@ WalReceiverMain(void)
 		/* Wait a while for data to arrive */
 		if (walrcv_receive(NAPTIME_PER_CYCLE, &type, &buf, &len))
 		{
+			/* Something was received from master, so reset timeout */
+			last_recv_timestamp = GetCurrentTimestamp();
+			ping_sent = false;
+
 			/* Accept the received data, and process it */
 			XLogWalRcvProcessMsg(type, buf, len);
 
 			/* Receive any more data we can without sleeping */
 			while (walrcv_receive(0, &type, &buf, &len))
+			{
+				last_recv_timestamp = GetCurrentTimestamp();
+				ping_sent = false;
 				XLogWalRcvProcessMsg(type, buf, len);
+			}
 
 			/* Let the master know that we received some data. */
-			XLogWalRcvSendReply();
+			XLogWalRcvSendReply(false, false);
 
 			/*
 			 * If we've written some records, flush them to disk and let the
@@ -335,10 +349,48 @@ WalReceiverMain(void)
 		else
 		{
 			/*
-			 * We didn't receive anything new, but send a status update to the
-			 * master anyway, to report any progress in applying WAL.
+			 * We didn't receive anything new. If we haven't heard anything
+			 * from the server for more than wal_receiver_timeout / 2,
+			 * ping the server. Also, if it's been longer than
+			 * wal_receiver_status_interval since the last update we sent,
+			 * send a status update to the master anyway, to report any
+			 * progress in applying WAL.
 			 */
-			XLogWalRcvSendReply();
+			bool requestReply = false;
+
+			/*
+			 * Check if time since last receive from standby has reached the
+			 * configured limit.
+			 */
+			if (wal_receiver_timeout > 0)
+			{
+				TimestampTz now = GetCurrentTimestamp();
+				TimestampTz timeout;
+
+				timeout = TimestampTzPlusMilliseconds(last_recv_timestamp,
+													  wal_receiver_timeout);
+
+				if (now >= timeout)
+					ereport(ERROR,
+							(errmsg("terminating walreceiver due to timeout")));
+
+				/*
+				 * We didn't receive anything new, for half of receiver
+				 * replication timeout. Ping the server.
+				 */
+				if (!ping_sent)
+				{
+					timeout = TimestampTzPlusMilliseconds(last_recv_timestamp,
+														  (wal_receiver_timeout/2));
+					if (now >= timeout)
+					{
+						requestReply = true;
+						ping_sent = true;
+					}
+				}
+			}
+
+			XLogWalRcvSendReply(requestReply, requestReply);
 			XLogWalRcvSendHSFeedback();
 		}
 	}
@@ -428,38 +480,59 @@ WalRcvQuickDieHandler(SIGNAL_ARGS)
 static void
 XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 {
+	int			hdrlen;
+	XLogRecPtr	dataStart;
+	XLogRecPtr	walEnd;
+	TimestampTz	sendTime;
+	bool		replyRequested;
+
+	resetStringInfo(&incoming_message);
+
 	switch (type)
 	{
 		case 'w':				/* WAL records */
 			{
-				WalDataMessageHeader msghdr;
-
-				if (len < sizeof(WalDataMessageHeader))
+				/* copy message to StringInfo */
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int64);
+				if (len < hdrlen)
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
 							 errmsg_internal("invalid WAL message received from primary")));
-				/* memcpy is required here for alignment reasons */
-				memcpy(&msghdr, buf, sizeof(WalDataMessageHeader));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
 
-				ProcessWalSndrMessage(msghdr.walEnd, msghdr.sendTime);
+				/* read the fields */
+				dataStart = pq_getmsgint64(&incoming_message);
+				walEnd = pq_getmsgint64(&incoming_message);
+				sendTime = IntegerTimestampToTimestampTz(
+					pq_getmsgint64(&incoming_message));
+				ProcessWalSndrMessage(walEnd, sendTime);
 
-				buf += sizeof(WalDataMessageHeader);
-				len -= sizeof(WalDataMessageHeader);
-				XLogWalRcvWrite(buf, len, msghdr.dataStart);
+				buf += hdrlen;
+				len -= hdrlen;
+				XLogWalRcvWrite(buf, len, dataStart);
 				break;
 			}
 		case 'k':				/* Keepalive */
 			{
-				PrimaryKeepaliveMessage keepalive;
-
-				if (len != sizeof(PrimaryKeepaliveMessage))
+				/* copy message to StringInfo */
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(char);
+				if (len != hdrlen)
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
 							 errmsg_internal("invalid keepalive message received from primary")));
-				/* memcpy is required here for alignment reasons */
-				memcpy(&keepalive, buf, sizeof(PrimaryKeepaliveMessage));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
 
-				ProcessWalSndrMessage(keepalive.walEnd, keepalive.sendTime);
+				/* read the fields */
+				walEnd = pq_getmsgint64(&incoming_message);
+				sendTime = IntegerTimestampToTimestampTz(
+					pq_getmsgint64(&incoming_message));
+				replyRequested = pq_getmsgbyte(&incoming_message);
+
+				ProcessWalSndrMessage(walEnd, sendTime);
+
+				/* If the primary requested a reply, send one immediately */
+				if (replyRequested)
+					XLogWalRcvSendReply(true, false);
 				break;
 			}
 		default:
@@ -609,28 +682,37 @@ XLogWalRcvFlush(bool dying)
 
 		/* Also let the master know that we made some progress */
 		if (!dying)
-		{
-			XLogWalRcvSendReply();
-			XLogWalRcvSendHSFeedback();
-		}
+			XLogWalRcvSendReply(false, false);
 	}
 }
 
 /*
- * Send reply message to primary, indicating our current XLOG positions and
- * the current time.
+ * Send reply message to primary, indicating our current XLOG positions, oldest
+ * xmin and the current time.
+ *
+ * If 'force' is not set, the message is only sent if enough time has
+ * passed since last status update to reach wal_receiver_status_interval.
+ * If wal_receiver_status_interval is disabled altogether and 'force' is
+ * false, this is a no-op.
+ *
+ * If 'requestReply' is true, requests the server to reply immediately upon
+ * receiving this message. This is used for heartbearts, when approaching
+ * wal_receiver_timeout.
  */
 static void
-XLogWalRcvSendReply(void)
+XLogWalRcvSendReply(bool force, bool requestReply)
 {
-	char		buf[sizeof(StandbyReplyMessage) + 1];
+	static XLogRecPtr writePtr = 0;
+	static XLogRecPtr flushPtr = 0;
+	XLogRecPtr	applyPtr;
+	static TimestampTz sendTime = 0;
 	TimestampTz now;
 
 	/*
 	 * If the user doesn't want status to be reported to the master, be sure
 	 * to exit before doing anything at all.
 	 */
-	if (wal_receiver_status_interval <= 0)
+	if (!force && wal_receiver_status_interval <= 0)
 		return;
 
 	/* Get current timestamp. */
@@ -645,27 +727,35 @@ XLogWalRcvSendReply(void)
 	 * this is only for reporting purposes and only on idle systems, that's
 	 * probably OK.
 	 */
-	if (XLByteEQ(reply_message.write, LogstreamResult.Write)
-		&& XLByteEQ(reply_message.flush, LogstreamResult.Flush)
-		&& !TimestampDifferenceExceeds(reply_message.sendTime, now,
+	if (!force
+		&& XLByteEQ(writePtr, LogstreamResult.Write)
+		&& XLByteEQ(flushPtr, LogstreamResult.Flush)
+		&& !TimestampDifferenceExceeds(sendTime, now,
 									   wal_receiver_status_interval * 1000))
 		return;
+	sendTime = now;
 
 	/* Construct a new message */
-	reply_message.write = LogstreamResult.Write;
-	reply_message.flush = LogstreamResult.Flush;
-	reply_message.apply = GetXLogReplayRecPtr(NULL);
-	reply_message.sendTime = now;
+	writePtr = LogstreamResult.Write;
+	flushPtr = LogstreamResult.Flush;
+	applyPtr = GetXLogReplayRecPtr(NULL);
 
-	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X",
-		 (uint32) (reply_message.write >> 32), (uint32) reply_message.write,
-		 (uint32) (reply_message.flush >> 32), (uint32) reply_message.flush,
-		 (uint32) (reply_message.apply >> 32), (uint32) reply_message.apply);
+	resetStringInfo(&reply_message);
+	pq_sendbyte(&reply_message, 'r');
+	pq_sendint64(&reply_message, writePtr);
+	pq_sendint64(&reply_message, flushPtr);
+	pq_sendint64(&reply_message, applyPtr);
+	pq_sendint64(&reply_message, GetCurrentIntegerTimestamp());
+	pq_sendbyte(&reply_message, requestReply ? 1 : 0);
 
-	/* Prepend with the message type and send it. */
-	buf[0] = 'r';
-	memcpy(&buf[1], &reply_message, sizeof(StandbyReplyMessage));
-	walrcv_send(buf, sizeof(StandbyReplyMessage) + 1);
+	/* Send it */
+	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X%s",
+		 (uint32) (writePtr >> 32), (uint32) writePtr,
+		 (uint32) (flushPtr >> 32), (uint32) flushPtr,
+		 (uint32) (applyPtr >> 32), (uint32) applyPtr,
+		 requestReply ? " (reply requested)" : "");
+
+	walrcv_send(reply_message.data, reply_message.len);
 }
 
 /*
@@ -675,11 +765,11 @@ XLogWalRcvSendReply(void)
 static void
 XLogWalRcvSendHSFeedback(void)
 {
-	char		buf[sizeof(StandbyHSFeedbackMessage) + 1];
 	TimestampTz now;
 	TransactionId nextXid;
 	uint32		nextEpoch;
 	TransactionId xmin;
+	static TimestampTz sendTime = 0;
 
 	/*
 	 * If the user doesn't want status to be reported to the master, be sure
@@ -694,9 +784,10 @@ XLogWalRcvSendHSFeedback(void)
 	/*
 	 * Send feedback at most once per wal_receiver_status_interval.
 	 */
-	if (!TimestampDifferenceExceeds(feedback_message.sendTime, now,
+	if (!TimestampDifferenceExceeds(sendTime, now,
 									wal_receiver_status_interval * 1000))
 		return;
+	sendTime = now;
 
 	/*
 	 * If Hot Standby is not yet active there is nothing to send. Check this
@@ -719,25 +810,23 @@ XLogWalRcvSendHSFeedback(void)
 	if (nextXid < xmin)
 		nextEpoch--;
 
-	/*
-	 * Always send feedback message.
-	 */
-	feedback_message.sendTime = now;
-	feedback_message.xmin = xmin;
-	feedback_message.epoch = nextEpoch;
-
 	elog(DEBUG2, "sending hot standby feedback xmin %u epoch %u",
-		 feedback_message.xmin,
-		 feedback_message.epoch);
+		 xmin, nextEpoch);
 
-	/* Prepend with the message type and send it. */
-	buf[0] = 'h';
-	memcpy(&buf[1], &feedback_message, sizeof(StandbyHSFeedbackMessage));
-	walrcv_send(buf, sizeof(StandbyHSFeedbackMessage) + 1);
+	/* Construct the the message and send it. */
+	resetStringInfo(&reply_message);
+	pq_sendbyte(&reply_message, 'h');
+	pq_sendint64(&reply_message, GetCurrentIntegerTimestamp());
+	pq_sendint(&reply_message, xmin, 4);
+	pq_sendint(&reply_message, nextEpoch, 4);
+	walrcv_send(reply_message.data, reply_message.len);
 }
 
 /*
- * Keep track of important messages from primary.
+ * Update shared memory status upon receiving a message from primary.
+ *
+ * 'walEnd' and 'sendTime' are the end-of-WAL and timestamp of the latest
+ * message, reported by primary.
  */
 static void
 ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)

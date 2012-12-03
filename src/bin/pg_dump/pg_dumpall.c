@@ -82,24 +82,6 @@ static char *filename = NULL;
 int
 main(int argc, char *argv[])
 {
-	char	   *pghost = NULL;
-	char	   *pgport = NULL;
-	char	   *pguser = NULL;
-	char	   *pgdb = NULL;
-	char	   *use_role = NULL;
-	enum trivalue prompt_password = TRI_DEFAULT;
-	bool		data_only = false;
-	bool		globals_only = false;
-	bool		output_clean = false;
-	bool		roles_only = false;
-	bool		tablespaces_only = false;
-	PGconn	   *conn;
-	int			encoding;
-	const char *std_strings;
-	int			c,
-				ret;
-	int			optindex;
-
 	static struct option long_options[] = {
 		{"data-only", no_argument, NULL, 'a'},
 		{"clean", no_argument, NULL, 'c'},
@@ -141,6 +123,24 @@ main(int argc, char *argv[])
 
 		{NULL, 0, NULL, 0}
 	};
+
+	char	   *pghost = NULL;
+	char	   *pgport = NULL;
+	char	   *pguser = NULL;
+	char	   *pgdb = NULL;
+	char	   *use_role = NULL;
+	enum trivalue prompt_password = TRI_DEFAULT;
+	bool		data_only = false;
+	bool		globals_only = false;
+	bool		output_clean = false;
+	bool		roles_only = false;
+	bool		tablespaces_only = false;
+	PGconn	   *conn;
+	int			encoding;
+	const char *std_strings;
+	int			c,
+				ret;
+	int			optindex;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_dump"));
 
@@ -200,7 +200,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'f':
-				filename = optarg;
+				filename = pg_strdup(optarg);
 				appendPQExpBuffer(pgdumpopts, " -f ");
 				doShellQuoting(pgdumpopts, filename);
 				break;
@@ -210,7 +210,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'h':
-				pghost = optarg;
+				pghost = pg_strdup(optarg);
 				appendPQExpBuffer(pgdumpopts, " -h ");
 				doShellQuoting(pgdumpopts, pghost);
 				break;
@@ -220,7 +220,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'l':
-				pgdb = optarg;
+				pgdb = pg_strdup(optarg);
 				break;
 
 			case 'o':
@@ -232,7 +232,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'p':
-				pgport = optarg;
+				pgport = pg_strdup(optarg);
 				appendPQExpBuffer(pgdumpopts, " -p ");
 				doShellQuoting(pgdumpopts, pgport);
 				break;
@@ -255,7 +255,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'U':
-				pguser = optarg;
+				pguser = pg_strdup(optarg);
 				appendPQExpBuffer(pgdumpopts, " -U ");
 				doShellQuoting(pgdumpopts, pguser);
 				break;
@@ -289,7 +289,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 3:
-				use_role = optarg;
+				use_role = pg_strdup(optarg);
 				appendPQExpBuffer(pgdumpopts, " --role ");
 				doShellQuoting(pgdumpopts, use_role);
 				break;
@@ -502,7 +502,7 @@ main(int argc, char *argv[])
 		}
 
 		/* Dump CREATE DATABASE commands */
-		if (!globals_only && !roles_only && !tablespaces_only)
+		if (binary_upgrade || (!globals_only && !roles_only && !tablespaces_only))
 			dumpCreateDB(conn);
 
 		/* Dump role/database settings */
@@ -745,9 +745,11 @@ dumpRoles(PGconn *conn)
 		 * will acquire the right properties even if it already exists (ie, it
 		 * won't hurt for the CREATE to fail).  This is particularly important
 		 * for the role we are connected as, since even with --clean we will
-		 * have failed to drop it.
+		 * have failed to drop it.  binary_upgrade cannot generate any errors,
+		 * so we assume the role is already created.
 		 */
-		appendPQExpBuffer(buf, "CREATE ROLE %s;\n", fmtId(rolename));
+		if (!binary_upgrade)
+			appendPQExpBuffer(buf, "CREATE ROLE %s;\n", fmtId(rolename));
 		appendPQExpBuffer(buf, "ALTER ROLE %s WITH", fmtId(rolename));
 
 		if (strcmp(PQgetvalue(res, i, i_rolsuper), "t") == 0)

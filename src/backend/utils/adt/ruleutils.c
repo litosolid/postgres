@@ -3690,8 +3690,8 @@ get_insert_query_def(Query *query, deparse_context *context)
 	get_with_clause(query, context);
 
 	/*
-	 * If it's an INSERT ... SELECT or VALUES (...), (...), ... there will be
-	 * a single RTE for the SELECT or VALUES.
+	 * If it's an INSERT ... SELECT or multi-row VALUES, there will be a
+	 * single RTE for the SELECT or VALUES.  Plain VALUES has neither.
 	 */
 	foreach(l, query->rtable)
 	{
@@ -3725,7 +3725,7 @@ get_insert_query_def(Query *query, deparse_context *context)
 		context->indentLevel += PRETTYINDENT_STD;
 		appendStringInfoChar(buf, ' ');
 	}
-	appendStringInfo(buf, "INSERT INTO %s (",
+	appendStringInfo(buf, "INSERT INTO %s ",
 					 generate_relation_name(rte->relid, NIL));
 
 	/*
@@ -3742,6 +3742,8 @@ get_insert_query_def(Query *query, deparse_context *context)
 		values_cell = NULL;
 	strippedexprs = NIL;
 	sep = "";
+	if (query->targetList)
+		appendStringInfoChar(buf, '(');
 	foreach(l, query->targetList)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(l);
@@ -3778,7 +3780,8 @@ get_insert_query_def(Query *query, deparse_context *context)
 													   context, true));
 		}
 	}
-	appendStringInfo(buf, ") ");
+	if (query->targetList)
+		appendStringInfo(buf, ") ");
 
 	if (select_rte)
 	{
@@ -3791,13 +3794,18 @@ get_insert_query_def(Query *query, deparse_context *context)
 		/* Add the multi-VALUES expression lists */
 		get_values_def(values_rte->values_lists, context);
 	}
-	else
+	else if (strippedexprs)
 	{
 		/* Add the single-VALUES expression list */
 		appendContextKeyword(context, "VALUES (",
 							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 2);
 		get_rule_expr((Node *) strippedexprs, context, false);
 		appendStringInfoChar(buf, ')');
+	}
+	else
+	{
+		/* No expressions, so it must be DEFAULT VALUES */
+		appendStringInfo(buf, "DEFAULT VALUES");
 	}
 
 	/* Add RETURNING if present */
@@ -6739,11 +6747,12 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		int			varno = ((RangeTblRef *) jtnode)->rtindex;
 		RangeTblEntry *rte = rt_fetch(varno, query->rtable);
 		char	   *refname = get_rtable_name(varno, context);
-		bool		gavealias = false;
+		bool		printalias;
 
 		if (rte->lateral)
 			appendStringInfoString(buf, "LATERAL ");
 
+		/* Print the FROM item proper */
 		switch (rte->rtekind)
 		{
 			case RTE_RELATION:
@@ -6776,11 +6785,12 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 				break;
 		}
 
+		/* Print the relation alias, if needed */
+		printalias = false;
 		if (rte->alias != NULL)
 		{
 			/* Always print alias if user provided one */
-			appendStringInfo(buf, " %s", quote_identifier(refname));
-			gavealias = true;
+			printalias = true;
 		}
 		else if (rte->rtekind == RTE_RELATION)
 		{
@@ -6790,10 +6800,7 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			 * resolve a conflict).
 			 */
 			if (strcmp(refname, get_relation_name(rte->relid)) != 0)
-			{
-				appendStringInfo(buf, " %s", quote_identifier(refname));
-				gavealias = true;
-			}
+				printalias = true;
 		}
 		else if (rte->rtekind == RTE_FUNCTION)
 		{
@@ -6802,16 +6809,28 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			 * renaming of the function and/or instability of the
 			 * FigureColname rules for things that aren't simple functions.
 			 */
-			appendStringInfo(buf, " %s", quote_identifier(refname));
-			gavealias = true;
+			printalias = true;
 		}
+		else if (rte->rtekind == RTE_CTE)
+		{
+			/*
+			 * No need to print alias if it's same as CTE name (this would
+			 * normally be the case, but not if set_rtable_names had to
+			 * resolve a conflict).
+			 */
+			if (strcmp(refname, rte->ctename) != 0)
+				printalias = true;
+		}
+		if (printalias)
+			appendStringInfo(buf, " %s", quote_identifier(refname));
 
+		/* Print the column definitions or aliases, if needed */
 		if (rte->rtekind == RTE_FUNCTION)
 		{
 			if (rte->funccoltypes != NIL)
 			{
 				/* Function returning RECORD, reconstruct the columndefs */
-				if (!gavealias)
+				if (!printalias)
 					appendStringInfo(buf, " AS ");
 				get_from_clause_coldeflist(rte->eref->colnames,
 										   rte->funccoltypes,

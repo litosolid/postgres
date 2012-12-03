@@ -64,7 +64,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 	if (InArchiveRecovery)
 	{
 		TLHistoryFileName(histfname, targetTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
+		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
 	}
 	else
 		TLHistoryFilePath(path, targetTLI);
@@ -153,7 +153,7 @@ existsTimeLineHistory(TimeLineID probeTLI)
 	if (InArchiveRecovery)
 	{
 		TLHistoryFileName(histfname, probeTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
+		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
 	}
 	else
 		TLHistoryFilePath(path, probeTLI);
@@ -244,8 +244,8 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	unlink(tmppath);
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = BasicOpenFile(tmppath, O_RDWR | O_CREAT | O_EXCL,
-					   S_IRUSR | S_IWUSR);
+	fd = OpenTransientFile(tmppath, O_RDWR | O_CREAT | O_EXCL,
+						   S_IRUSR | S_IWUSR);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -257,12 +257,12 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	if (InArchiveRecovery)
 	{
 		TLHistoryFileName(histfname, parentTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
+		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
 	}
 	else
 		TLHistoryFilePath(path, parentTLI);
 
-	srcfd = BasicOpenFile(path, O_RDONLY, 0);
+	srcfd = OpenTransientFile(path, O_RDONLY, 0);
 	if (srcfd < 0)
 	{
 		if (errno != ENOENT)
@@ -304,7 +304,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 			}
 		}
-		close(srcfd);
+		CloseTransientFile(srcfd);
 	}
 
 	/*
@@ -345,7 +345,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 
-	if (close(fd))
+	if (CloseTransientFile(fd))
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tmppath)));

@@ -127,6 +127,7 @@ CheckIndexCompatible(Oid oldId,
 	Oid			accessMethodId;
 	Oid			relationId;
 	HeapTuple	tuple;
+	Form_pg_index indexForm;
 	Form_pg_am	accessMethodForm;
 	bool		amcanorder;
 	int16	   *coloptions;
@@ -196,17 +197,22 @@ CheckIndexCompatible(Oid oldId,
 	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(oldId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u", oldId);
+	indexForm = (Form_pg_index) GETSTRUCT(tuple);
 
-	/* We don't assess expressions or predicates; assume incompatibility. */
+	/*
+	 * We don't assess expressions or predicates; assume incompatibility.
+	 * Also, if the index is invalid for any reason, treat it as incompatible.
+	 */
 	if (!(heap_attisnull(tuple, Anum_pg_index_indpred) &&
-		  heap_attisnull(tuple, Anum_pg_index_indexprs)))
+		  heap_attisnull(tuple, Anum_pg_index_indexprs) &&
+		  IndexIsValid(indexForm)))
 	{
 		ReleaseSysCache(tuple);
 		return false;
 	}
 
 	/* Any change in operator class or collation breaks compatibility. */
-	old_natts = ((Form_pg_index) GETSTRUCT(tuple))->indnatts;
+	old_natts = indexForm->indnatts;
 	Assert(old_natts == numberOfAttributes);
 
 	d = SysCacheGetAttr(INDEXRELID, tuple, Anum_pg_index_indcollation, &isnull);
@@ -592,7 +598,7 @@ DefineIndex(IndexStmt *stmt,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
 					 allowSystemTableMods,
 					 skip_build || stmt->concurrent,
-					 stmt->concurrent, false);
+					 stmt->concurrent, !check_rights, false);
 
 	/* Add any requested comment */
 	if (stmt->idxcomment != NULL)
@@ -689,7 +695,7 @@ DefineIndex(IndexStmt *stmt,
 	 * commit this transaction, any new transactions that open the table must
 	 * insert new entries into the index for insertions and non-HOT updates.
 	 */
-	index_concurrent_mark(indexRelationId, INDEX_MARK_READY);
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_READY);
 
 	/* we can do away with our snapshot */
 	PopActiveSnapshot();
@@ -742,7 +748,7 @@ DefineIndex(IndexStmt *stmt,
 	/*
 	 * Index can now be marked valid -- update its pg_index entry
 	 */
-	index_concurrent_mark(indexRelationId, INDEX_MARK_VALID);
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_VALID);
 
 	/*
 	 * The pg_index update will cause backends (including this one) to update
@@ -1018,7 +1024,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		 * Once we commit this transaction, any new transactions that open the table
 		 * must insert new entries into the index for insertions and non-HOT updates.
 		 */
-		index_concurrent_mark(concurrentOid, INDEX_MARK_READY);
+		index_set_state_flags(concurrentOid, INDEX_CREATE_SET_READY);
 	}
 
 	/* we can do away with our snapshot */
@@ -1069,7 +1075,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Concurrent indexes can now be marked valid -- update pg_index entries
 	 */
 	foreach(lc, concurrentIndexIds)
-		index_concurrent_mark(lfirst_oid(lc), INDEX_MARK_VALID);
+		index_set_state_flags(lfirst_oid(lc), INDEX_CREATE_SET_VALID);
 
 	/*
 	 * The concurrent indexes are now valid as they contain all the tuples
@@ -1127,7 +1133,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		index_concurrent_swap(concurrentOid, indOid);
 
 		/* Mark the old index as invalid */
-		index_concurrent_mark(indOid, INDEX_MARK_NOT_VALID);
+		index_set_state_flags(indOid, INDEX_DROP_CLEAR_VALID);
 	}
 
 	/* We can now do away with our active snapshot */
@@ -1155,7 +1161,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 	/* Mark the old indexes as not ready */
 	foreach(lc, realIndexIds)
-		index_concurrent_mark(lfirst_oid(lc), INDEX_MARK_NOT_READY);
+		index_set_state_flags(lfirst_oid(lc), INDEX_DROP_SET_DEAD);
 
 	/* We can do away with our snapshot */
 	PopActiveSnapshot();

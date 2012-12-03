@@ -48,7 +48,6 @@
 #include "nodes/replnodes.h"
 #include "replication/basebackup.h"
 #include "replication/syncrep.h"
-#include "replication/walprotocol.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -66,6 +65,16 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
+/*
+ * Maximum data payload in a WAL data message.	Must be >= XLOG_BLCKSZ.
+ *
+ * We don't have a good idea of what a good value would be; there's some
+ * overhead per message in both walsender and walreceiver, but on the other
+ * hand sending large batches makes walsender less responsive to signals
+ * because signals are checked only between messages.  128kB (with
+ * default 8k blocks) seems like a reasonable guess for now.
+ */
+#define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)
 
 /* Array of WalSnds in shared memory */
 WalSndCtlData *WalSndCtl = NULL;
@@ -82,7 +91,7 @@ static bool	replication_started = false; /* Started streaming yet? */
 
 /* User-settable parameters for walsender */
 int			max_wal_senders = 0;	/* the maximum number of concurrent walsenders */
-int			replication_timeout = 60 * 1000;	/* maximum time to send one
+int			wal_sender_timeout = 60 * 1000;	/* maximum time to send one
 												 * WAL data message */
 /*
  * State for WalSndWakeupRequest
@@ -103,15 +112,17 @@ static uint32 sendOff = 0;
  */
 static XLogRecPtr sentPtr = 0;
 
-/*
- * Buffer for processing reply messages.
- */
+/* Buffers for constructing outgoing messages and processing reply messages. */
+static StringInfoData output_message;
 static StringInfoData reply_message;
+static StringInfoData tmpbuf;
 
 /*
  * Timestamp of the last receipt of the reply from the standby.
  */
 static TimestampTz last_reply_timestamp;
+/* Have we sent a heartbeat message asking for reply, since last reply? */
+static bool	ping_sent = false;
 
 /* Flags set by signal handlers for later service in main loop */
 static volatile sig_atomic_t got_SIGHUP = false;
@@ -126,14 +137,14 @@ static void WalSndLastCycleHandler(SIGNAL_ARGS);
 static void WalSndLoop(void) __attribute__((noreturn));
 static void InitWalSenderSlot(void);
 static void WalSndKill(int code, Datum arg);
-static void XLogSend(char *msgbuf, bool *caughtup);
+static void XLogSend(bool *caughtup);
 static void IdentifySystem(void);
 static void StartReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
-static void WalSndKeepalive(char *msgbuf);
+static void WalSndKeepalive(bool requestReply);
 
 
 /* Initialize walsender process before entering the main command loop */
@@ -465,7 +476,10 @@ ProcessRepliesIfAny(void)
 	 * Save the last reply timestamp if we've received at least one reply.
 	 */
 	if (received)
+	{
 		last_reply_timestamp = GetCurrentTimestamp();
+		ping_sent = false;
+	}
 }
 
 /*
@@ -518,14 +532,27 @@ ProcessStandbyMessage(void)
 static void
 ProcessStandbyReplyMessage(void)
 {
-	StandbyReplyMessage reply;
+	XLogRecPtr	writePtr,
+				flushPtr,
+				applyPtr;
+	bool		replyRequested;
 
-	pq_copymsgbytes(&reply_message, (char *) &reply, sizeof(StandbyReplyMessage));
+	/* the caller already consumed the msgtype byte */
+	writePtr = pq_getmsgint64(&reply_message);
+	flushPtr = pq_getmsgint64(&reply_message);
+	applyPtr = pq_getmsgint64(&reply_message);
+	(void) pq_getmsgint64(&reply_message);	/* sendTime; not used ATM */
+	replyRequested = pq_getmsgbyte(&reply_message);
 
-	elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X",
-		 (uint32) (reply.write >> 32), (uint32) reply.write,
-		 (uint32) (reply.flush >> 32), (uint32) reply.flush,
-		 (uint32) (reply.apply >> 32), (uint32) reply.apply);
+	elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s",
+		 (uint32) (writePtr >> 32), (uint32) writePtr,
+		 (uint32) (flushPtr >> 32), (uint32) flushPtr,
+		 (uint32) (applyPtr >> 32), (uint32) applyPtr,
+		 replyRequested ? " (reply requested)" : "");
+
+	/* Send a reply if the standby requested one. */
+	if (replyRequested)
+		WalSndKeepalive(false);
 
 	/*
 	 * Update shared state for this WalSender process based on reply data from
@@ -536,9 +563,9 @@ ProcessStandbyReplyMessage(void)
 		volatile WalSnd *walsnd = MyWalSnd;
 
 		SpinLockAcquire(&walsnd->mutex);
-		walsnd->write = reply.write;
-		walsnd->flush = reply.flush;
-		walsnd->apply = reply.apply;
+		walsnd->write = writePtr;
+		walsnd->flush = flushPtr;
+		walsnd->apply = applyPtr;
 		SpinLockRelease(&walsnd->mutex);
 	}
 
@@ -552,20 +579,25 @@ ProcessStandbyReplyMessage(void)
 static void
 ProcessStandbyHSFeedbackMessage(void)
 {
-	StandbyHSFeedbackMessage reply;
 	TransactionId nextXid;
 	uint32		nextEpoch;
+	TransactionId feedbackXmin;
+	uint32		feedbackEpoch;
 
-	/* Decipher the reply message */
-	pq_copymsgbytes(&reply_message, (char *) &reply,
-					sizeof(StandbyHSFeedbackMessage));
+	/*
+	 * Decipher the reply message. The caller already consumed the msgtype
+	 * byte.
+	 */
+	(void) pq_getmsgint64(&reply_message);	/* sendTime; not used ATM */
+	feedbackXmin = pq_getmsgint(&reply_message, 4);
+	feedbackEpoch = pq_getmsgint(&reply_message, 4);
 
 	elog(DEBUG2, "hot standby feedback xmin %u epoch %u",
-		 reply.xmin,
-		 reply.epoch);
+		 feedbackXmin,
+		 feedbackEpoch);
 
 	/* Ignore invalid xmin (can't actually happen with current walreceiver) */
-	if (!TransactionIdIsNormal(reply.xmin))
+	if (!TransactionIdIsNormal(feedbackXmin))
 		return;
 
 	/*
@@ -577,18 +609,18 @@ ProcessStandbyHSFeedbackMessage(void)
 	 */
 	GetNextXidAndEpoch(&nextXid, &nextEpoch);
 
-	if (reply.xmin <= nextXid)
+	if (feedbackXmin <= nextXid)
 	{
-		if (reply.epoch != nextEpoch)
+		if (feedbackEpoch != nextEpoch)
 			return;
 	}
 	else
 	{
-		if (reply.epoch + 1 != nextEpoch)
+		if (feedbackEpoch + 1 != nextEpoch)
 			return;
 	}
 
-	if (!TransactionIdPrecedesOrEquals(reply.xmin, nextXid))
+	if (!TransactionIdPrecedesOrEquals(feedbackXmin, nextXid))
 		return;					/* epoch OK, but it's wrapped around */
 
 	/*
@@ -598,9 +630,9 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * cleanup conflicts on the standby server.
 	 *
 	 * There is a small window for a race condition here: although we just
-	 * checked that reply.xmin precedes nextXid, the nextXid could have gotten
+	 * checked that feedbackXmin precedes nextXid, the nextXid could have gotten
 	 * advanced between our fetching it and applying the xmin below, perhaps
-	 * far enough to make reply.xmin wrap around.  In that case the xmin we
+	 * far enough to make feedbackXmin wrap around.  In that case the xmin we
 	 * set here would be "in the future" and have no effect.  No point in
 	 * worrying about this since it's too late to save the desired data
 	 * anyway.	Assuming that the standby sends us an increasing sequence of
@@ -613,31 +645,26 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * safe, and if we're moving it backwards, well, the data is at risk
 	 * already since a VACUUM could have just finished calling GetOldestXmin.)
 	 */
-	MyPgXact->xmin = reply.xmin;
+	MyPgXact->xmin = feedbackXmin;
 }
 
 /* Main loop of walsender process that streams the WAL over Copy messages. */
 static void
 WalSndLoop(void)
 {
-	char	   *output_message;
 	bool		caughtup = false;
 
 	/*
-	 * Allocate buffer that will be used for each output message.  We do this
-	 * just once to reduce palloc overhead.  The buffer must be made large
-	 * enough for maximum-sized messages.
+	 * Allocate buffers that will be used for each outgoing and incoming
+	 * message.  We do this just once to reduce palloc overhead.
 	 */
-	output_message = palloc(1 + sizeof(WalDataMessageHeader) + MAX_SEND_SIZE);
-
-	/*
-	 * Allocate buffer that will be used for processing reply messages.  As
-	 * above, do this just once to reduce palloc overhead.
-	 */
+	initStringInfo(&output_message);
 	initStringInfo(&reply_message);
+	initStringInfo(&tmpbuf);
 
 	/* Initialize the last reply timestamp */
 	last_reply_timestamp = GetCurrentTimestamp();
+	ping_sent = false;
 
 	/* Loop forever, unless we get an error */
 	for (;;)
@@ -672,7 +699,7 @@ WalSndLoop(void)
 		 * caught up.
 		 */
 		if (!pq_is_send_pending())
-			XLogSend(output_message, &caughtup);
+			XLogSend(&caughtup);
 		else
 			caughtup = false;
 
@@ -708,7 +735,7 @@ WalSndLoop(void)
 			if (walsender_ready_to_stop)
 			{
 				/* ... let's just be real sure we're caught up ... */
-				XLogSend(output_message, &caughtup);
+				XLogSend(&caughtup);
 				if (caughtup && !pq_is_send_pending())
 				{
 					/* Inform the standby that XLOG streaming is done */
@@ -738,23 +765,34 @@ WalSndLoop(void)
 
 			if (pq_is_send_pending())
 				wakeEvents |= WL_SOCKET_WRITEABLE;
-			else if (MyWalSnd->sendKeepalive)
+			else if (wal_sender_timeout > 0 && !ping_sent)
 			{
-				WalSndKeepalive(output_message);
-				/* Try to flush pending output to the client */
-				if (pq_flush_if_writable() != 0)
-					break;
+				/*
+				 * If half of wal_sender_timeout has lapsed without receiving
+				 * any reply from standby, send a keep-alive message to standby
+				 * requesting an immediate reply.
+				 */
+				timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
+													  wal_sender_timeout / 2);
+				if (GetCurrentTimestamp() >= timeout)
+				{
+					WalSndKeepalive(true);
+					ping_sent = true;
+					/* Try to flush pending output to the client */
+					if (pq_flush_if_writable() != 0)
+						break;
+				}
 			}
 
 			/* Determine time until replication timeout */
-			if (replication_timeout > 0)
+			if (wal_sender_timeout > 0)
 			{
 				timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
-													  replication_timeout);
-				sleeptime = 1 + (replication_timeout / 10);
+													  wal_sender_timeout);
+				sleeptime = 1 + (wal_sender_timeout / 10);
 			}
 
-			/* Sleep until something happens or replication timeout */
+			/* Sleep until something happens or we time out */
 			ImmediateInterruptOK = true;
 			CHECK_FOR_INTERRUPTS();
 			WaitLatchOrSocket(&MyWalSnd->latch, wakeEvents,
@@ -766,8 +804,7 @@ WalSndLoop(void)
 			 * possibility that the client replied just as we reached the
 			 * timeout ... he's supposed to reply *before* that.
 			 */
-			if (replication_timeout > 0 &&
-				GetCurrentTimestamp() >= timeout)
+			if (wal_sender_timeout > 0 && GetCurrentTimestamp() >= timeout)
 			{
 				/*
 				 * Since typically expiration of replication timeout means
@@ -1016,21 +1053,16 @@ retry:
  * but not yet sent to the client, and buffer it in the libpq output
  * buffer.
  *
- * msgbuf is a work area in which the output message is constructed.  It's
- * passed in just so we can avoid re-palloc'ing the buffer on each cycle.
- * It must be of size 1 + sizeof(WalDataMessageHeader) + MAX_SEND_SIZE.
- *
  * If there is no unsent WAL remaining, *caughtup is set to true, otherwise
  * *caughtup is set to false.
  */
 static void
-XLogSend(char *msgbuf, bool *caughtup)
+XLogSend(bool *caughtup)
 {
 	XLogRecPtr	SendRqstPtr;
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
 	Size		nbytes;
-	WalDataMessageHeader msghdr;
 
 	/*
 	 * Attempt to send all data that's already been written out and fsync'd to
@@ -1107,25 +1139,31 @@ XLogSend(char *msgbuf, bool *caughtup)
 	/*
 	 * OK to read and send the slice.
 	 */
-	msgbuf[0] = 'w';
+	resetStringInfo(&output_message);
+	pq_sendbyte(&output_message, 'w');
+
+	pq_sendint64(&output_message, startptr);	/* dataStart */
+	pq_sendint64(&output_message, SendRqstPtr);	/* walEnd */
+	pq_sendint64(&output_message, 0);			/* sendtime, filled in last */
 
 	/*
 	 * Read the log directly into the output buffer to avoid extra memcpy
 	 * calls.
 	 */
-	XLogRead(msgbuf + 1 + sizeof(WalDataMessageHeader), startptr, nbytes);
+	enlargeStringInfo(&output_message, nbytes);
+	XLogRead(&output_message.data[output_message.len], startptr, nbytes);
+	output_message.len += nbytes;
+	output_message.data[output_message.len] = '\0';
 
 	/*
-	 * We fill the message header last so that the send timestamp is taken as
-	 * late as possible.
+	 * Fill the send timestamp last, so that it is taken as late as possible.
 	 */
-	msghdr.dataStart = startptr;
-	msghdr.walEnd = SendRqstPtr;
-	msghdr.sendTime = GetCurrentTimestamp();
+	resetStringInfo(&tmpbuf);
+	pq_sendint64(&tmpbuf, GetCurrentIntegerTimestamp());
+	memcpy(&output_message.data[1 + sizeof(int64) + sizeof(int64)],
+		   tmpbuf.data, sizeof(int64));
 
-	memcpy(msgbuf + 1, &msghdr, sizeof(WalDataMessageHeader));
-
-	pq_putmessage_noblock('d', msgbuf, 1 + sizeof(WalDataMessageHeader) + nbytes);
+	pq_putmessage_noblock('d', output_message.data, output_message.len);
 
 	sentPtr = endptr;
 
@@ -1492,21 +1530,25 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/*
+  * This function is used to send keepalive message to standby.
+  * If requestReply is set, sets a flag in the message requesting the standby
+  * to send a message back to us, for heartbeat purposes.
+  */
 static void
-WalSndKeepalive(char *msgbuf)
+WalSndKeepalive(bool requestReply)
 {
-	PrimaryKeepaliveMessage keepalive_message;
-
-	/* Construct a new message */
-	keepalive_message.walEnd = sentPtr;
-	keepalive_message.sendTime = GetCurrentTimestamp();
-
 	elog(DEBUG2, "sending replication keepalive");
 
-	/* Prepend with the message type and send it. */
-	msgbuf[0] = 'k';
-	memcpy(msgbuf + 1, &keepalive_message, sizeof(PrimaryKeepaliveMessage));
-	pq_putmessage_noblock('d', msgbuf, sizeof(PrimaryKeepaliveMessage) + 1);
+	/* construct the message... */
+	resetStringInfo(&output_message);
+	pq_sendbyte(&output_message, 'k');
+	pq_sendint64(&output_message, sentPtr);
+	pq_sendint64(&output_message, GetCurrentIntegerTimestamp());
+	pq_sendbyte(&output_message, requestReply ? 1 : 0);
+
+	/* ... and send it wrapped in CopyData */
+	pq_putmessage_noblock('d', output_message.data, output_message.len);
 }
 
 /*

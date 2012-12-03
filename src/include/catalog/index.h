@@ -19,14 +19,6 @@
 
 #define DEFAULT_INDEX_TYPE	"btree"
 
-typedef enum IndexMarkOperation
-{
-	INDEX_MARK_VALID,
-	INDEX_MARK_NOT_VALID,
-	INDEX_MARK_READY,
-	INDEX_MARK_NOT_READY
-} IndexMarkOperation;
-
 
 /* Typedef for callback function for IndexBuildHeapScan */
 typedef void (*IndexBuildCallback) (Relation index,
@@ -35,6 +27,15 @@ typedef void (*IndexBuildCallback) (Relation index,
 												bool *isnull,
 												bool tupleIsAlive,
 												void *state);
+
+/* Action code for index_set_state_flags */
+typedef enum
+{
+	INDEX_CREATE_SET_READY,
+	INDEX_CREATE_SET_VALID,
+	INDEX_DROP_CLEAR_VALID,
+	INDEX_DROP_SET_DEAD
+} IndexStateFlagsAction;
 
 
 extern void index_check_primary_key(Relation heapRel,
@@ -60,6 +61,7 @@ extern Oid index_create(Relation heapRelation,
 			 bool allow_system_table_mods,
 			 bool skip_build,
 			 bool concurrent,
+			 bool is_internal,
 			 bool is_reindex);
 
 extern Oid index_concurrent_create(Relation heapRelation,
@@ -69,8 +71,6 @@ extern Oid index_concurrent_create(Relation heapRelation,
 extern void index_concurrent_build(Oid heapOid,
 								   Oid indexOid,
 								   bool isprimary);
-
-extern void index_concurrent_mark(Oid indOid, IndexMarkOperation operation);
 
 extern void index_concurrent_swap(Oid indexOid1, Oid indexOid2);
 
@@ -112,6 +112,8 @@ extern double IndexBuildHeapScan(Relation heapRelation,
 				   void *callback_state);
 
 extern void validate_index(Oid heapId, Oid indexId, Snapshot snapshot);
+
+extern void index_set_state_flags(Oid indexId, IndexStateFlagsAction action);
 
 extern void reindex_index(Oid indexId, bool skip_constraint_checks);
 

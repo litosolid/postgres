@@ -675,8 +675,9 @@ include 'filename'
         an otherwise idle connection.  A value of 0 uses the system default.
         This parameter is supported only on systems that support the
         <symbol>TCP_KEEPIDLE</> or <symbol>TCP_KEEPALIVE</> symbols, and on
-        Windows; on other systems, it must be zero. This parameter is ignored
-        for connections made via a Unix-domain socket.
+        Windows; on other systems, it must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -698,8 +699,9 @@ include 'filename'
         otherwise idle connection.  A value of 0 uses the system default.
         This parameter is supported only on systems that support the
         <symbol>TCP_KEEPINTVL</> symbol, and on Windows; on other systems, it
-        must be zero. This parameter is ignored for connections made via a
-        Unix-domain socket.
+        must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -720,8 +722,9 @@ include 'filename'
         Specifies the number of keepalive packets to send on an otherwise idle
         connection.  A value of 0 uses the system default.  This parameter is
         supported only on systems that support the <symbol>TCP_KEEPCNT</>
-        symbol; on other systems, it must be zero. This parameter is ignored
-        for connections made via a Unix-domain socket.
+        symbol; on other systems, it must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -2236,10 +2239,10 @@ include 'filename'
        </listitem>
       </varlistentry>
 
-     <varlistentry id="guc-replication-timeout" xreflabel="replication_timeout">
-      <term><varname>replication_timeout</varname> (<type>integer</type>)</term>
+     <varlistentry id="guc-wal-sender-timeout" xreflabel="wal_sender_timeout">
+      <term><varname>wal_sender_timeout</varname> (<type>integer</type>)</term>
       <indexterm>
-       <primary><varname>replication_timeout</> configuration parameter</primary>
+       <primary><varname>wal_sender_timeout</> configuration parameter</primary>
       </indexterm>
       <listitem>
        <para>
@@ -2250,12 +2253,6 @@ include 'filename'
         can only be set in
         the <filename>postgresql.conf</> file or on the server command line.
         The default value is 60 seconds.
-       </para>
-       <para>
-        To prevent connections from being terminated prematurely,
-        <xref linkend="guc-wal-receiver-status-interval">
-        must be enabled on the standby, and its value must be less than the
-        value of <varname>replication_timeout</>.
        </para>
       </listitem>
      </varlistentry>
@@ -2474,11 +2471,6 @@ include 'filename'
        the <filename>postgresql.conf</> file or on the server command line.
        The default value is 10 seconds.
       </para>
-      <para>
-       When <xref linkend="guc-replication-timeout"> is enabled on a sending server,
-       <varname>wal_receiver_status_interval</> must be enabled, and its value
-       must be less than the value of <varname>replication_timeout</>.
-      </para>
       </listitem>
      </varlistentry>
 
@@ -2503,6 +2495,25 @@ include 'filename'
         If cascaded replication is in use the feedback is passed upstream
         until it eventually reaches the primary.  Standbys make no other use
         of feedback they receive other than to pass upstream.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-wal-receiver-timeout" xreflabel="wal_receiver_timeout">
+      <term><varname>wal_receiver_timeout</varname> (<type>integer</type>)</term>
+      <indexterm>
+       <primary><varname>wal_receiver_timeout</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Terminate replication connections that are inactive longer
+        than the specified number of milliseconds. This is useful for
+        the receiving standby server to detect a primary node crash or network
+        outage.
+        A value of zero disables the timeout mechanism.  This parameter
+        can only be set in
+        the <filename>postgresql.conf</> file or on the server command line.
+        The default value is 60 seconds.
        </para>
       </listitem>
      </varlistentry>
@@ -4799,7 +4810,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         Likewise, the current session's temporary-table schema,
         <literal>pg_temp_<replaceable>nnn</></>, is always searched if it
         exists.  It can be explicitly listed in the path by using the
-        alias <literal>pg_temp</>.  If it is not listed in the path then
+        alias <literal>pg_temp</><indexterm><primary>pg_temp</></>.  If it is not listed in the path then
         it is searched first (even before <literal>pg_catalog</>).  However,
         the temporary schema is only searched for relation (table, view,
         sequence, etc) and data type names.  It is never searched for
