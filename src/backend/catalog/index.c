@@ -3379,8 +3379,6 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 	/*
 	 * Open and lock the parent heap relation.	ShareLock is sufficient since
 	 * we only need to be sure no schema or data changes are going on.
-	 * In the case of concurrent operation, a lower-level lock is taken to
-	 * allow INSERT/UPDATE/DELETE operations.
 	 */
 	heapId = IndexGetRelation(indexId, false);
 	heapRelation = heap_open(heapId, ShareLock);
@@ -3388,8 +3386,6 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 	/*
 	 * Open the target index relation and get an exclusive lock on it, to
 	 * ensure that no one else is touching this particular index.
-	 * For concurrent operation, a lower lock is taken to allow INSERT, UPDATE
-	 * and DELETE operations.
 	 */
 	iRel = index_open(indexId, AccessExclusiveLock);
 
