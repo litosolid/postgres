@@ -670,6 +670,7 @@ UpdateIndexRelation(Oid indexoid,
  * concurrent: if true, do not lock the table against writers.	The index
  *		will be marked "invalid" and the caller must take additional steps
  *		to fix it up.
+ * is_internal: if true, post creation hook for new index
  * is_reindex: if true, create an index that is used as a duplicate of an
  *		existing index created during a concurrent operation. This index can
  *		also be a toast relation. Sufficient locks are normally taken on
