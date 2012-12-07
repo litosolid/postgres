@@ -19,7 +19,6 @@
 
 #define DEFAULT_INDEX_TYPE	"btree"
 
-
 /* Typedef for callback function for IndexBuildHeapScan */
 typedef void (*IndexBuildCallback) (Relation index,
 												HeapTuple htup,
