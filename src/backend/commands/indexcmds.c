@@ -1117,6 +1117,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	{
 		Oid			indOid = lfirst_oid(lc);
 		Oid			concurrentOid = lfirst_oid(lc2);
+		Relation	indexRel, indexParentRel;
 
 		/* Move to next concurrent item */
 		lc2 = lnext(lc2);
@@ -1133,11 +1134,27 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		 */
 		index_set_state_flags(indOid, INDEX_DROP_CLEAR_VALID);
 
-		/* Mark the cache of associated relation as invalid? */
-		//TODO
-
 		/* Swap old index and its concurrent */
 		index_concurrent_swap(concurrentOid, indOid);
+
+		/*
+		 * Mark the cache of associated relation as invalid, open relation
+		 * relations.
+		 */
+		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
+		indexParentRel = heap_open(indexRel->rd_index->indrelid,
+								   ShareUpdateExclusiveLock);
+
+		/*
+		 * Invalidate the relcache for the table, so that after this commit
+		 * all sessions will refresh any cached plans that might reference the
+		 * index.
+		 */
+		CacheInvalidateRelcache(indexParentRel);
+
+		/* Close relations opened previously for cache invalidation */
+		index_close(indexRel, ShareUpdateExclusiveLock);
+		heap_close(indexParentRel, ShareUpdateExclusiveLock);
 
 		/* Commit this transaction and make old index invalidation visible */
 		CommitTransactionCommand();
