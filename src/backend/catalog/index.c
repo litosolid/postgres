@@ -1572,7 +1572,6 @@ index_drop(Oid indexId, bool concurrent)
 				indexrelid;
 	LOCKTAG		heaplocktag;
 	LOCKMODE	lockmode;
-	VirtualTransactionId *old_lockholders;
 
 	/*
 	 * To drop an index safely, we must grab exclusive lock on its parent
@@ -1711,13 +1710,7 @@ index_drop(Oid indexId, bool concurrent)
 		 * not check for that.	Also, prepared xacts are not reported, which
 		 * is fine since they certainly aren't going to do anything more.
 		 */
-		old_lockholders = GetLockConflicts(&heaplocktag, AccessExclusiveLock);
-
-		while (VirtualTransactionIdIsValid(*old_lockholders))
-		{
-			VirtualXactLock(*old_lockholders, true);
-			old_lockholders++;
-		}
+		WaitForVirtualLocks(heaplocktag, AccessExclusiveLock);
 
 		/*
 		 * No more predicate locks will be acquired on this index, and we're
@@ -1761,13 +1754,7 @@ index_drop(Oid indexId, bool concurrent)
 		 * Wait till every transaction that saw the old index state has
 		 * finished.  The logic here is the same as above.
 		 */
-		old_lockholders = GetLockConflicts(&heaplocktag, AccessExclusiveLock);
-
-		while (VirtualTransactionIdIsValid(*old_lockholders))
-		{
-			VirtualXactLock(*old_lockholders, true);
-			old_lockholders++;
-		}
+		WaitForVirtualLocks(heaplocktag, AccessExclusiveLock);
 
 		/*
 		 * Re-open relations to allow us to complete our actions.
