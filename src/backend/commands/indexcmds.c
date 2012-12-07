@@ -1099,7 +1099,6 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 	/* Commit this transaction to make the concurrent index valid */
 	CommitTransactionCommand();
-	StartTransactionCommand();
 
 	/*
 	 * Phase 4 of REINDEX CONCURRENTLY
@@ -1107,15 +1106,8 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 	 * Now that the concurrent indexes are valid and can be used, we need to
 	 * swap each concurrent index with its corresponding old index. The old
 	 * index is marked as invalid once this is done, making it not usable
-	 * by other backends once this transaction is committed.
+	 * by other backends once its associated transaction is committed.
 	 */
-
-	/* Take reference snapshot used to wait for older snapshots */
-	snapshot = RegisterSnapshot(GetTransactionSnapshot());
-	PushActiveSnapshot(snapshot);
-
-	/* Wait for old snapshots, like previously */
-	WaitForOldSnapshots(snapshot);
 
 	/* Get the first element is concurrent index list */
 	lc2 = list_head(concurrentIndexIds);
@@ -1129,23 +1121,29 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 		/* Move to next concurrent item */
 		lc2 = lnext(lc2);
 
+		/*
+		 * Each index needs to be swapped in a separate transaction, so start
+		 * a new one.
+		 */
+		StartTransactionCommand();
+
+		/*
+		 * Mark the old index as invalid, this needs to be done as the first
+		 * action in this transaction.
+		 */
+		index_set_state_flags(indOid, INDEX_DROP_CLEAR_VALID);
+
+		/* Mark the cache of associated relation as invalid? */
+		//TODO
+
 		/* Swap old index and its concurrent */
 		index_concurrent_swap(concurrentOid, indOid);
 
-		/* Mark the old index as invalid */
-		index_set_state_flags(indOid, INDEX_DROP_CLEAR_VALID);
+		/* Commit this transaction and make old index invalidation visible */
+		CommitTransactionCommand();
 	}
 
-	/* We can now do away with our active snapshot */
-	PopActiveSnapshot();
-
-	/* And we can remove the validating snapshot too */
-	UnregisterSnapshot(snapshot);
-
-	/*
-	 * Commit this transaction had make old index invalidation visible.
-	 */
-	CommitTransactionCommand();
+	/* Continue process inside a new transaction block */
 	StartTransactionCommand();
 
 	/*
