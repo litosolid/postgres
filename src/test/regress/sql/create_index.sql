@@ -916,14 +916,15 @@ ORDER BY thousand;
 --
 -- Check behavior of REINDEX and REINDEX CONCURRENTLY
 --
-CREATE TABLE concur_reindex_tab (c1 int, c2 text);
+CREATE TABLE concur_reindex_tab (c1 int);
 -- REINDEX
 REINDEX TABLE concur_reindex_tab; -- notice
 REINDEX TABLE concur_reindex_tab CONCURRENTLY; -- notice
+ALTER TABLE concur_reindex_tab ADD COLUMN c2 text; -- add toast index
 CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(c1);
 CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(c2);
-INSERT INTO concur_reindex_tab VALUES  (1,'a');
-INSERT INTO concur_reindex_tab VALUES  (2,'a');
+INSERT INTO concur_reindex_tab VALUES  (1, 'a');
+INSERT INTO concur_reindex_tab VALUES  (2, 'a');
 REINDEX INDEX concur_reindex_tab1 CONCURRENTLY;
 REINDEX TABLE concur_reindex_tab CONCURRENTLY;
 
@@ -932,7 +933,7 @@ REINDEX TABLE concur_reindex_tab CONCURRENTLY;
 BEGIN;
 REINDEX TABLE concur_reindex_tab CONCURRENTLY;
 COMMIT;
-REINDEX TABLE pg_database CONCURRENTLY;-- no shared relation
+REINDEX TABLE pg_database CONCURRENTLY; -- no shared relation
 REINDEX DATABASE postgres CONCURRENTLY; -- not allowed for DATABASE
 REINDEX SYSTEM postgres CONCURRENTLY; -- not allowed for SYSTEM
 
