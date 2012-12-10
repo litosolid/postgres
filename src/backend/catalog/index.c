@@ -1093,7 +1093,7 @@ index_create(Relation heapRelation,
 	}
 	else
 	{
-		index_build(heapRelation, indexRelation, indexInfo, isprimary, false);
+		index_build(heapRelation, indexRelation, indexInfo, isprimary, false, true);
 	}
 
 	/*
@@ -1247,8 +1247,11 @@ index_concurrent_build(Oid heapOid,
 	indexInfo->ii_Concurrent = true;
 	indexInfo->ii_BrokenHotChain = false;
 
-	/* Now build the index */
-	index_build(rel, indexRelation, indexInfo, isprimary, false);
+	/*
+	 * Now build the index, in the case of a parent relation being a toast
+	 * relation, its reltoastidxid is updated when calling index_concurrent_swap.
+	 */
+	index_build(rel, indexRelation, indexInfo, isprimary, false, false);
 
 	/* Close both the relations, but keep the locks */
 	heap_close(rel, NoLock);
@@ -1262,14 +1265,19 @@ index_concurrent_build(Oid heapOid,
  * Replace old index by old index in a concurrent context. For the time being
  * what is done here is switching the relation names of the indexes. If extra
  * operations are necessary during a concurrent swap, processing should be
- * added here.
+ * added here. AccessExclusiveLock is taken on the index relations that are
+ * swapped until the end of the transaction where this function is called.
+ * For toast indexes, it is also necessary to modify reltoastidxid of the parent
+ * relation so we need also to take RowExclusiveLock in this case until the
+ * end of the transaction block for this relation.
  */
 void
 index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 {
-	char	nameNew[NAMEDATALEN],
-			nameOld[NAMEDATALEN],
-			nameTemp[NAMEDATALEN];
+	char			nameNew[NAMEDATALEN],
+					nameOld[NAMEDATALEN],
+					nameTemp[NAMEDATALEN];
+	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
 
 	/* The new index is going to use the name of the old index */
 	snprintf(nameNew, NAMEDATALEN, "%s", get_rel_name(newIndexOid));
@@ -1293,6 +1301,25 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 
 	/* Make the catalog update visible */
 	CommandCounterIncrement();
+
+	/*
+	 * If the index swapped is a toast index, we need to take an exclusive lock on
+	 * its parent toast relation and then update reltoastidxid to the new index Oid
+	 * value.
+	 */
+	if (get_rel_relkind(parentOid) == RELKIND_TOASTVALUE)
+	{
+		Relation	pg_class;
+
+		/* Open pg_class and fetch a writable copy of the relation tuple */
+		pg_class = heap_open(parentOid, RowExclusiveLock);
+
+		/* Update the statistics of this pg_class entry with new toast index Oid */
+		index_update_stats(pg_class, false, false, newIndexOid, -1.0);
+
+		/* Close parent relation */
+		heap_close(pg_class, RowExclusiveLock);
+	}
 }
 
 
@@ -2176,6 +2203,8 @@ index_update_stats(Relation rel,
  *
  * isprimary tells whether to mark the index as a primary-key index.
  * isreindex indicates we are recreating a previously-existing index.
+ * istoastupdate tells whether it is necessary to update the toast index Oid
+ * for parent relation.
  *
  * Note: when reindexing an existing index, isprimary can be false even if
  * the index is a PK; it's already properly marked and need not be re-marked.
@@ -2189,7 +2218,8 @@ index_build(Relation heapRelation,
 			Relation indexRelation,
 			IndexInfo *indexInfo,
 			bool isprimary,
-			bool isreindex)
+			bool isreindex,
+			bool istoastupdate)
 {
 	RegProcedure procedure;
 	IndexBuildResult *stats;
@@ -2304,7 +2334,8 @@ index_build(Relation heapRelation,
 	index_update_stats(heapRelation,
 					   true,
 					   isprimary,
-					   (heapRelation->rd_rel->relkind == RELKIND_TOASTVALUE) ?
+					   (heapRelation->rd_rel->relkind == RELKIND_TOASTVALUE) &&
+							istoastupdate ?
 					   RelationGetRelid(indexRelation) : InvalidOid,
 					   stats->heap_tuples);
 
@@ -3422,7 +3453,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 
 		/* Initialize the index and rebuild */
 		/* Note: we do not need to re-establish pkey setting */
-		index_build(heapRelation, iRel, indexInfo, false, true);
+		index_build(heapRelation, iRel, indexInfo, false, true, true);
 	}
 	PG_CATCH();
 	{

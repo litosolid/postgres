@@ -101,7 +101,8 @@ extern void index_build(Relation heapRelation,
 			Relation indexRelation,
 			IndexInfo *indexInfo,
 			bool isprimary,
-			bool isreindex);
+			bool isreindex,
+			bool istoastupdate);
 
 extern double IndexBuildHeapScan(Relation heapRelation,
 				   Relation indexRelation,
