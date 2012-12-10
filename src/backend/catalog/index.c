@@ -1303,8 +1303,8 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	CommandCounterIncrement();
 
 	/*
-	 * If the index swapped is a toast index, we need to take an exclusive lock on
-	 * its parent toast relation and then update reltoastidxid to the new index Oid
+	 * If the index swapped is a toast index, take an exclusive lock on its
+	 * parent toast relation and then update reltoastidxid to the new index Oid
 	 * value.
 	 */
 	if (get_rel_relkind(parentOid) == RELKIND_TOASTVALUE)
