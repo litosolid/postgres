@@ -71,9 +71,9 @@ extern void index_concurrent_build(Oid heapOid,
 								   Oid indexOid,
 								   bool isprimary);
 
-extern void index_concurrent_swap(Oid indexOid1, Oid indexOid2);
+extern void index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid);
 
-extern void index_concurrent_drop(List *IndexIds);
+extern void index_concurrent_drop(List *indexIds);
 
 extern void index_constraint_create(Relation heapRelation,
 						Oid indexRelationId,

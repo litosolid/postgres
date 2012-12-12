@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-REINDEX { INDEX | TABLE | DATABASE | SYSTEM } <replaceable class="PARAMETER">name</replaceable> [ FORCE ] [ CONCURRENTLY ]
+REINDEX { INDEX | TABLE | DATABASE | SYSTEM } [ CONCURRENTLY ] <replaceable class="PARAMETER">name</replaceable> [ FORCE ]
 </synopsis>
  </refsynopsisdiv>
 

@@ -919,23 +919,23 @@ ORDER BY thousand;
 CREATE TABLE concur_reindex_tab (c1 int);
 -- REINDEX
 REINDEX TABLE concur_reindex_tab; -- notice
-REINDEX TABLE concur_reindex_tab CONCURRENTLY; -- notice
+REINDEX TABLE CONCURRENTLY concur_reindex_tab; -- notice
 ALTER TABLE concur_reindex_tab ADD COLUMN c2 text; -- add toast index
 CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(c1);
 CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(c2);
 INSERT INTO concur_reindex_tab VALUES  (1, 'a');
 INSERT INTO concur_reindex_tab VALUES  (2, 'a');
-REINDEX INDEX concur_reindex_tab1 CONCURRENTLY;
-REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+REINDEX INDEX CONCURRENTLY concur_reindex_tab1;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 
 -- Check errors
 -- Cannot run inside a transaction block
 BEGIN;
-REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 COMMIT;
-REINDEX TABLE pg_database CONCURRENTLY; -- no shared relation
-REINDEX DATABASE postgres CONCURRENTLY; -- not allowed for DATABASE
-REINDEX SYSTEM postgres CONCURRENTLY; -- not allowed for SYSTEM
+REINDEX TABLE CONCURRENTLY pg_database; -- no shared relation
+REINDEX DATABASE CONCURRENTLY postgres; -- not allowed for DATABASE
+REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
 
 -- Check the relation status, there should not be invalid indexes
 \d concur_reindex_tab

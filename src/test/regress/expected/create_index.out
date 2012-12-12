@@ -2728,26 +2728,26 @@ CREATE TABLE concur_reindex_tab (c1 int);
 -- REINDEX
 REINDEX TABLE concur_reindex_tab; -- notice
 NOTICE:  table "concur_reindex_tab" has no indexes
-REINDEX TABLE concur_reindex_tab CONCURRENTLY; -- notice
+REINDEX TABLE CONCURRENTLY concur_reindex_tab; -- notice
 NOTICE:  table "concur_reindex_tab" has no indexes
 ALTER TABLE concur_reindex_tab ADD COLUMN c2 text; -- add toast index
 CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(c1);
 CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(c2);
 INSERT INTO concur_reindex_tab VALUES  (1, 'a');
 INSERT INTO concur_reindex_tab VALUES  (2, 'a');
-REINDEX INDEX concur_reindex_tab1 CONCURRENTLY;
-REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+REINDEX INDEX CONCURRENTLY concur_reindex_tab1;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 -- Check errors
 -- Cannot run inside a transaction block
 BEGIN;
-REINDEX TABLE concur_reindex_tab CONCURRENTLY;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
-REINDEX TABLE pg_database CONCURRENTLY; -- no shared relation
+REINDEX TABLE CONCURRENTLY pg_database; -- no shared relation
 ERROR:  concurrent reindex is not supported for shared relations
-REINDEX DATABASE postgres CONCURRENTLY; -- not allowed for DATABASE
+REINDEX DATABASE CONCURRENTLY postgres; -- not allowed for DATABASE
 ERROR:  cannot reindex system concurrently
-REINDEX SYSTEM postgres CONCURRENTLY; -- not allowed for SYSTEM
+REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
 ERROR:  cannot reindex system concurrently
 -- Check the relation status, there should not be invalid indexes
 \d concur_reindex_tab
