@@ -42,6 +42,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "commands/defrem.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -1274,17 +1275,19 @@ index_concurrent_build(Oid heapOid,
 void
 index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 {
-	char			nameNew[NAMEDATALEN],
-					nameOld[NAMEDATALEN],
-					nameTemp[NAMEDATALEN];
+	char		   *nameNew, *nameOld, *nameTemp;
 	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
 
-	/* The new index is going to use the name of the old index */
-	snprintf(nameNew, NAMEDATALEN, "%s", get_rel_name(newIndexOid));
-	snprintf(nameOld, NAMEDATALEN, "%s", get_rel_name(oldIndexOid));
+	/* Allocate all the names used for this operation */
+	nameNew = get_rel_name(newIndexOid);
+	nameOld = get_rel_name(oldIndexOid);
+	/* Build a unique temporary name */
+	nameTemp = ChooseRelationName((const char *) get_rel_name(oldIndexOid),
+								  NULL,
+								  "tmp",
+								  get_rel_namespace(oldIndexOid));
 
 	/* Change the name of old index to something temporary */
-	snprintf(nameTemp, NAMEDATALEN, "cct_%d", oldIndexOid);
 	RenameRelationInternal(oldIndexOid, nameTemp);
 
 	/* Make the catalog update visible */
