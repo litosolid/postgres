@@ -1276,22 +1276,9 @@ ReindexRelationsConcurrently(List *relationIds)
 		}
 
 		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
-		WaitForVirtualLocks(*heapLockTag, ShareLock);
 
-		/* Get fresh snapshot for this step */
-		PushActiveSnapshot(GetTransactionSnapshot());
-
-		/* Set the index as dead */
-		index_set_state_flags(indOid, INDEX_DROP_SET_DEAD);
-
-		/*
-		 * Invalidate the relcache for the table, so that after this commit all
-		 * sessions will refresh any cached plans taht might reference the index.
-		 */
-		CacheInvalidateRelcacheByRelid(relOid);
-
-		/* We can do away with our snapshot */
-		PopActiveSnapshot();
+		/* Finish the index invalidation and set it as dead */
+		index_concurrent_set_dead(indOid, relOid, *heapLockTag);
 
 		/* Commit this transaction to make the update visible. */
 		CommitTransactionCommand();
@@ -1302,6 +1289,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	/* Get fresh snapshot for next step */
 	PushActiveSnapshot(GetTransactionSnapshot());
 
+	//foreach(lc, indexIds)
+	//{
+	//	index_drop(lfirst_oid(lc), true);
+	//}
 	/*
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
