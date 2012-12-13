@@ -1081,10 +1081,17 @@ ReindexRelationsConcurrently(List *relationIds)
 
 		/*
 		 * Update the pg_index row of the concurrent index as ready for inserts.
-		 * Once we commit this transaction, any new transactions that open the table
-		 * must insert new entries into the index for insertions and non-HOT updates.
+		 * Once we commit this transaction, any new transactions that open the
+		 * table must insert new entries into the index for insertions and
+		 * non-HOT updates.
 		 */
 		index_set_state_flags(concurrentOid, INDEX_CREATE_SET_READY);
+
+		/*
+		 * Invalidate the relcache for the table, so that after this commit all
+		 * sessions will refresh any cached plans taht might reference the index.
+		 */
+		CacheInvalidateRelcacheByRelid(relOid);
 
 		/* we can do away with our snapshot */
 		PopActiveSnapshot();
@@ -1165,7 +1172,7 @@ ReindexRelationsConcurrently(List *relationIds)
 
 		/*
 		 * The pg_index update will cause backends to update its entries for the
-		 * concurrent index but it is necessary to do the same thing
+		 * concurrent index but it is necessary to do the same thing for cache.
 		 */
 		CacheInvalidateRelcacheByRelid(relOid);
 
@@ -1252,8 +1259,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	{
 		LOCKTAG	   *heapLockTag;
 		Oid			indOid = lfirst_oid(lc);
+		Oid			relOid;
 
 		StartTransactionCommand();
+		relOid = IndexGetRelation(indOid, false);
 
 		/*
 		 * Find the locktag of parent table for this index, we need to wait for
@@ -1262,7 +1271,7 @@ ReindexRelationsConcurrently(List *relationIds)
 		foreach(lc2, lockTags)
 		{
 			LOCKTAG *localTag = (LOCKTAG *) lfirst(lc2);
-			if (IndexGetRelation(indOid, false) == localTag->locktag_field2)
+			if (relOid == localTag->locktag_field2)
 				heapLockTag = localTag;
 		}
 
@@ -1274,6 +1283,12 @@ ReindexRelationsConcurrently(List *relationIds)
 
 		/* Set the index as dead */
 		index_set_state_flags(indOid, INDEX_DROP_SET_DEAD);
+
+		/*
+		 * Invalidate the relcache for the table, so that after this commit all
+		 * sessions will refresh any cached plans taht might reference the index.
+		 */
+		CacheInvalidateRelcacheByRelid(relOid);
 
 		/* We can do away with our snapshot */
 		PopActiveSnapshot();
