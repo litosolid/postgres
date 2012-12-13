@@ -1085,7 +1085,7 @@ ReindexConcurrentIndexes(Oid heapOid, List *indexIds)
 
 	/*
 	 * The pg_index update will cause backends to update its entries for the
-	 * concurrent index but it is necessary to do the same whing
+	 * concurrent index but it is necessary to do the same thing
 	 */
 	CacheInvalidateRelcacheByRelid(heapLockId.relId);
 
