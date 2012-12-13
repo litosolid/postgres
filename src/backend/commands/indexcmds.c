@@ -814,6 +814,12 @@ ReindexRelationsConcurrently(List *relationIds)
 					Relation	heapRelation = heap_open(relationOid,
 													ShareUpdateExclusiveLock);
 
+					/* Relation on which is based index cannot be shared */
+					if (heapRelation->rd_rel->relisshared)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("concurrent reindex is not supported for shared relations")));
+
 					/* Add all the valid indexes of relation to list */
 					foreach(lc2, RelationGetIndexList(heapRelation))
 					{
