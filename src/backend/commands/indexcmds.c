@@ -987,14 +987,14 @@ ReindexRelationsConcurrently(List *relationIds)
 	{
 		Relation	heapRelation = heap_open(lfirst_oid(lc), ShareUpdateExclusiveLock);
 		LockRelId	lockrelid = heapRelation->rd_lockInfo.lockRelId;
-		LOCKTAG		heaplocktag;
+		LOCKTAG		*heaplocktag = (LOCKTAG *) palloc(sizeof(LOCKTAG));
 
 		/* Add lockrelid of parent relation to the list of locked relations */
 		relationLocks = lappend(relationLocks, &lockrelid);
 
 		/* Save the LOCKTAG for this parent relation for the wait phase */
-		SET_LOCKTAG_RELATION(heaplocktag, lockrelid.dbId, lockrelid.relId);
-		lockTags = lappend(lockTags, &heaplocktag);
+		SET_LOCKTAG_RELATION(*heaplocktag, lockrelid.dbId, lockrelid.relId);
+		lockTags = lappend(lockTags, heaplocktag);
 
 		/* Close heap relation */
 		heap_close(heapRelation, NoLock);
