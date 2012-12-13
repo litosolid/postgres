@@ -1038,8 +1038,9 @@ ReindexRelationsConcurrently(List *relationIds)
 		Relation	indexRel;
 		Oid			indOid = lfirst_oid(lc);
 		Oid			concurrentOid = lfirst_oid(lc2);
+		Oid			relOid;
 		bool		primary;
-		LOCKTAG		heapLockTag;
+		LOCKTAG	   *heapLockTag = NULL;
 		ListCell   *cell;
 
 		/* Move to next concurrent item */
@@ -1048,19 +1049,22 @@ ReindexRelationsConcurrently(List *relationIds)
 		/* Start new transaction for this index concurrent build */
 		StartTransactionCommand();
 
+		/* Get the parent relation Oid */
+		relOid = IndexGetRelation(indOid, false);
+
 		/*
 		 * Find the locktag of parent table for this index, we need to wait for
 		 * locks on it.
 		 */
 		foreach(cell, lockTags)
 		{
-			LOCKTAG localTag = * (LOCKTAG *) lfirst(cell);
-			if (IndexGetRelation(indOid, false) == localTag.locktag_field2)
+			LOCKTAG	*localTag = (LOCKTAG *) lfirst(cell);
+			if (relOid == localTag->locktag_field2)
 				heapLockTag = localTag;
 		}
 
-		Assert(heapLockTag.locktag_field2 != InvalidOid);
-		WaitForVirtualLocks(heapLockTag, ShareLock);
+		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
+		WaitForVirtualLocks(*heapLockTag, ShareLock);
 
 		/* Set ActiveSnapshot since functions in the indexes may need it */
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -1113,7 +1117,7 @@ ReindexRelationsConcurrently(List *relationIds)
 	{
 		Oid indOid = lfirst_oid(lc);
 		Oid relOid;
-		LOCKTAG heapLockTag;
+		LOCKTAG *heapLockTag;
 
 		/* Open separate transaction to validate index */
 		StartTransactionCommand();
@@ -1127,14 +1131,13 @@ ReindexRelationsConcurrently(List *relationIds)
 		 */
 		foreach(lc2, lockTags)
 		{
-			LOCKTAG localTag = * (LOCKTAG *) lfirst(lc2);
-			if (relOid == localTag.locktag_field2)
+			LOCKTAG *localTag = (LOCKTAG *) lfirst(lc2);
+			if (relOid == localTag->locktag_field2)
 				heapLockTag = localTag;
 		}
 
-		Assert(heapLockTag.locktag_field2 != InvalidOid);
-
-		WaitForVirtualLocks(heapLockTag, ShareLock);
+		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
+		WaitForVirtualLocks(*heapLockTag, ShareLock);
 
 		/*
 		 * Take the reference snapshot that will be used for the concurrent indexes
@@ -1247,7 +1250,7 @@ ReindexRelationsConcurrently(List *relationIds)
 	/* Mark the old indexes as not ready */
 	foreach(lc, indexIds)
 	{
-		LOCKTAG		heapLockTag;
+		LOCKTAG	   *heapLockTag;
 		Oid			indOid = lfirst_oid(lc);
 
 		StartTransactionCommand();
@@ -1258,13 +1261,13 @@ ReindexRelationsConcurrently(List *relationIds)
 		 */
 		foreach(lc2, lockTags)
 		{
-			LOCKTAG localTag = * (LOCKTAG *) lfirst(lc2);
-			if (IndexGetRelation(indOid, false) == localTag.locktag_field2)
+			LOCKTAG *localTag = (LOCKTAG *) lfirst(lc2);
+			if (IndexGetRelation(indOid, false) == localTag->locktag_field2)
 				heapLockTag = localTag;
 		}
 
-		Assert(heapLockTag.locktag_field2 != InvalidOid);
-		WaitForVirtualLocks(heapLockTag, ShareLock);
+		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
+		WaitForVirtualLocks(*heapLockTag, ShareLock);
 
 		/* Get fresh snapshot for this step */
 		PushActiveSnapshot(GetTransactionSnapshot());
