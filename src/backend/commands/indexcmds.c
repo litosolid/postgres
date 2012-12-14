@@ -1249,19 +1249,55 @@ ReindexRelationsConcurrently(List *relationIds)
 	/*
 	 * Phase 5 of REINDEX CONCURRENTLY
 	 *
-	 * Drop the old indexes. This needs to be done through performDeletion
-	 * or related dependencies will not be dropped for the old indexes. Each
-	 * index is dropped relying in the same mechanism as DROP INDEX
-	 * CONCURRENTLY.
+	 * The old indexes need to be marked as not ready. We need also to wait for
+	 * transactions that might use them. Each operation is performed with a
+	 * separate transaction.
 	 */
+
+	/* Mark the old indexes as not ready */
+	foreach(lc, indexIds)
+	{
+		LOCKTAG	   *heapLockTag;
+		Oid			indOid = lfirst_oid(lc);
+		Oid			relOid;
+
+		StartTransactionCommand();
+		relOid = IndexGetRelation(indOid, false);
+
+		/*
+		 * Find the locktag of parent table for this index, we need to wait for
+		 * locks on it.
+		 */
+		foreach(lc2, lockTags)
+		{
+			LOCKTAG *localTag = (LOCKTAG *) lfirst(lc2);
+			if (relOid == localTag->locktag_field2)
+				heapLockTag = localTag;
+		}
+
+		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
+
+		/* Finish the index invalidation and set it as dead */
+		index_concurrent_set_dead(indOid, relOid, *heapLockTag);
+
+		/* Commit this transaction to make the update visible. */
+		CommitTransactionCommand();
+	}
+
 	StartTransactionCommand();
 
 	/* Get fresh snapshot for next step */
 	PushActiveSnapshot(GetTransactionSnapshot());
 
+	//foreach(lc, indexIds)
+	//{
+	//	index_drop(lfirst_oid(lc), true);
+	//}
 	/*
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
+	 * Drop the old indexes. This needs to be done through performDeletion
+	 * or related dependencies will not be dropped for the old indexes.
 	 */
 	index_concurrent_drop(indexIds);
 
