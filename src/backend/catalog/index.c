@@ -1397,7 +1397,7 @@ index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
  * Drop a list of indexes as the last step of a concurrent process. Deletion is
  * done through performDeletion or dependencies of the index are not dropped.
  * At this point all the indexes are already considered as invalid and dead so
- * they can be dropped in a non-concurrentway.
+ * they can be dropped without using any concurrent options.
  */
 void
 index_concurrent_drop(List *indexIds)
