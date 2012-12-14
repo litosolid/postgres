@@ -1392,6 +1392,29 @@ index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
 }
 
 /*
+ * index_concurrent_clear_valid
+ *
+ * Release the valid state of a given index and then release the cache of
+ * its parent relation. This function should be called when initializing an
+ * index drop in a concurrent context before setting the index as dead.
+ */
+void
+index_concurrent_clear_valid(Relation heapRelation, Oid indexOid)
+{
+	/*
+	 * Mark index invalid by updating its pg_index entry
+	 */
+	index_set_state_flags(indexOid, INDEX_DROP_CLEAR_VALID);
+
+	/*
+	 * Invalidate the relcache for the table, so that after this commit
+	 * all sessions will refresh any cached plans that might reference the
+	 * index.
+	 */
+	CacheInvalidateRelcache(heapRelation);
+}
+
+/*
  * index_concurrent_drop
  *
  * Drop a list of indexes as the last step of a concurrent process. Deletion is
@@ -1750,17 +1773,8 @@ index_drop(Oid indexId, bool concurrent)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("DROP INDEX CONCURRENTLY must be first action in transaction")));
 
-		/*
-		 * Mark index invalid by updating its pg_index entry
-		 */
-		index_set_state_flags(indexId, INDEX_DROP_CLEAR_VALID);
-
-		/*
-		 * Invalidate the relcache for the table, so that after this commit
-		 * all sessions will refresh any cached plans that might reference the
-		 * index.
-		 */
-		CacheInvalidateRelcache(userHeapRelation);
+		/* Mark the index as invalid */
+		index_concurrent_clear_valid(userHeapRelation, indexId);
 
 		/* save lockrelid and locktag for below, then close but keep locks */
 		heaprelid = userHeapRelation->rd_lockInfo.lockRelId;

@@ -75,6 +75,8 @@ extern void index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid);
 
 extern void index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag);
 
+extern void index_concurrent_clear_valid(Relation heapRelation, Oid indexOid);
+
 extern void index_concurrent_drop(List *indexIds);
 
 extern void index_constraint_create(Relation heapRelation,

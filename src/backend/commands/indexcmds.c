@@ -1215,21 +1215,18 @@ ReindexRelationsConcurrently(List *relationIds)
 		StartTransactionCommand();
 
 		/*
-		 * Mark the old index as invalid, this needs to be done as the first
-		 * action in this transaction.
-		 */
-		index_set_state_flags(indOid, INDEX_DROP_CLEAR_VALID);
-
-		/* Swap old index and its concurrent */
-		index_concurrent_swap(concurrentOid, indOid);
-
-		/*
 		 * Mark the cache of associated relation as invalid, open relation
 		 * relations.
 		 */
 		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 		indexParentRel = heap_open(indexRel->rd_index->indrelid,
 								   ShareUpdateExclusiveLock);
+
+		/* Mark the old index as invalid */
+		index_concurrent_clear_valid(indexParentRel, indOid);
+
+		/* Swap old index and its concurrent */
+		index_concurrent_swap(concurrentOid, indOid);
 
 		/*
 		 * Invalidate the relcache for the table, so that after this commit
