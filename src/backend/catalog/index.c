@@ -1325,6 +1325,71 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	}
 }
 
+/*
+ * index_concurrent_set_dead
+ *
+ * Perform the last invalidation stage of DROP INDEX CONCURRENTLY before
+ * actually dropping the index. After calling this function the index is
+ * seen by all the backends as dead.
+ */
+void
+index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
+{
+	Relation	heapRelation;
+	Relation	indexRelation;
+
+	/*
+	 * Now we must wait until no running transaction could be using the
+	 * index for a query.  To do this, inquire which xacts currently would
+	 * conflict with AccessExclusiveLock on the table -- ie, which ones
+	 * have a lock of any kind on the table. Then wait for each of these
+	 * xacts to commit or abort. Note we do not need to worry about xacts
+	 * that open the table for reading after this point; they will see the
+	 * index as invalid when they open the relation.
+	 *
+	 * Note: the reason we use actual lock acquisition here, rather than
+	 * just checking the ProcArray and sleeping, is that deadlock is
+	 * possible if one of the transactions in question is blocked trying
+	 * to acquire an exclusive lock on our table.  The lock code will
+	 * detect deadlock and error out properly.
+	 *
+	 * Note: GetLockConflicts() never reports our own xid, hence we need
+	 * not check for that.	Also, prepared xacts are not reported, which
+	 * is fine since they certainly aren't going to do anything more.
+	 */
+	WaitForVirtualLocks(locktag, AccessExclusiveLock);
+
+	/*
+	 * No more predicate locks will be acquired on this index, and we're
+	 * about to stop doing inserts into the index which could show
+	 * conflicts with existing predicate locks, so now is the time to move
+	 * them to the heap relation.
+	 */
+	heapRelation = heap_open(heapId, ShareUpdateExclusiveLock);
+	indexRelation = index_open(indexId, ShareUpdateExclusiveLock);
+	TransferPredicateLocksToHeapRelation(indexRelation);
+
+	/*
+	 * Now we are sure that nobody uses the index for queries; they just
+	 * might have it open for updating it.	So now we can unset indisready
+	 * and indislive, then wait till nobody could be using it at all
+	 * anymore.
+	 */
+	index_set_state_flags(indexId, INDEX_DROP_SET_DEAD);
+
+	/*
+	 * Invalidate the relcache for the table, so that after this commit
+	 * all sessions will refresh the table's index list.  Forgetting just
+	 * the index's relcache entry is not enough.
+	 */
+	CacheInvalidateRelcache(heapRelation);
+
+	/*
+	 * Close the relations again, though still holding session lock.
+	 */
+	heap_close(heapRelation, NoLock);
+	index_close(indexRelation, NoLock);
+}
 
 /*
  * index_concurrent_drop
@@ -1721,57 +1786,8 @@ index_drop(Oid indexId, bool concurrent)
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
-		/*
-		 * Now we must wait until no running transaction could be using the
-		 * index for a query.  To do this, inquire which xacts currently would
-		 * conflict with AccessExclusiveLock on the table -- ie, which ones
-		 * have a lock of any kind on the table. Then wait for each of these
-		 * xacts to commit or abort. Note we do not need to worry about xacts
-		 * that open the table for reading after this point; they will see the
-		 * index as invalid when they open the relation.
-		 *
-		 * Note: the reason we use actual lock acquisition here, rather than
-		 * just checking the ProcArray and sleeping, is that deadlock is
-		 * possible if one of the transactions in question is blocked trying
-		 * to acquire an exclusive lock on our table.  The lock code will
-		 * detect deadlock and error out properly.
-		 *
-		 * Note: GetLockConflicts() never reports our own xid, hence we need
-		 * not check for that.	Also, prepared xacts are not reported, which
-		 * is fine since they certainly aren't going to do anything more.
-		 */
-		WaitForVirtualLocks(heaplocktag, AccessExclusiveLock);
-
-		/*
-		 * No more predicate locks will be acquired on this index, and we're
-		 * about to stop doing inserts into the index which could show
-		 * conflicts with existing predicate locks, so now is the time to move
-		 * them to the heap relation.
-		 */
-		userHeapRelation = heap_open(heapId, ShareUpdateExclusiveLock);
-		userIndexRelation = index_open(indexId, ShareUpdateExclusiveLock);
-		TransferPredicateLocksToHeapRelation(userIndexRelation);
-
-		/*
-		 * Now we are sure that nobody uses the index for queries; they just
-		 * might have it open for updating it.	So now we can unset indisready
-		 * and indislive, then wait till nobody could be using it at all
-		 * anymore.
-		 */
-		index_set_state_flags(indexId, INDEX_DROP_SET_DEAD);
-
-		/*
-		 * Invalidate the relcache for the table, so that after this commit
-		 * all sessions will refresh the table's index list.  Forgetting just
-		 * the index's relcache entry is not enough.
-		 */
-		CacheInvalidateRelcache(userHeapRelation);
-
-		/*
-		 * Close the relations again, though still holding session lock.
-		 */
-		heap_close(userHeapRelation, NoLock);
-		index_close(userIndexRelation, NoLock);
+		/* Finish invalidation of index and mark it as dead */
+		index_concurrent_set_dead(indexId, heapId, heaplocktag);
 
 		/*
 		 * Again, commit the transaction to make the pg_index update visible

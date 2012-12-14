@@ -1259,7 +1259,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	/* Get fresh snapshot for next step */
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	/* Then actually perform the drop */
+	/*
+	 * Phase 6 of REINDEX CONCURRENTLY
+	 *
+	 */
 	index_concurrent_drop(indexIds);
 
 	/*
