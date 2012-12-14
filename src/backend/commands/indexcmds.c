@@ -1289,15 +1289,14 @@ ReindexRelationsConcurrently(List *relationIds)
 	/* Get fresh snapshot for next step */
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	//foreach(lc, indexIds)
-	//{
-	//	index_drop(lfirst_oid(lc), true);
-	//}
 	/*
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
 	 * Drop the old indexes. This needs to be done through performDeletion
-	 * or related dependencies will not be dropped for the old indexes.
+	 * or related dependencies will not be dropped for the old indexes. The
+	 * internal mechanism of DROP INDEX CONCURRENTLY is not used as here the
+	 * indexes are already considered as dead and invalid, so they will not
+	 * be used by other backends.
 	 */
 	index_concurrent_drop(indexIds);
 
