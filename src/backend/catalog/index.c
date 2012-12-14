@@ -1432,8 +1432,8 @@ index_concurrent_drop(List *indexIds)
 
 	/* Perform deletion for normal and toast indexes */
 	performMultipleDeletions(objects,
-							 PERFORM_DELETION_CONCURRENTLY,
-							 0);
+							 DROP_RESTRICT,
+							 0); //PERFORM_DELETION_CONCURRENTLY);
 }
 
 
