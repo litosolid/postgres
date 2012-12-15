@@ -1351,11 +1351,11 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 		ScanKeyInit(&skey[0],
 					Anum_pg_constraint_confrelid,
 					BTEqualStrategyNumber, F_OIDEQ,
-					parentOid);
+					ObjectIdGetDatum(parentOid));
 
 		conRel = heap_open(ConstraintRelationId, AccessShareLock);
-		conscan = systable_beginscan(conRel, ConstraintRelidIndexId, true,
-									 SnapshotNow, 1, skey);
+		conscan = systable_beginscan(conRel, ConstraintForeignRelidIndexId,
+									 true, SnapshotNow, 1, skey);
 
 		while (HeapTupleIsValid(htup = systable_getnext(conscan)))
 		{
