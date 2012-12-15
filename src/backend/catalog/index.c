@@ -1349,7 +1349,7 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 		 * with the index by scanning using conrelid.
 		 */
 		ScanKeyInit(&skey[0],
-					Anum_pg_constraint_conrelid,
+					Anum_pg_constraint_confrelid,
 					BTEqualStrategyNumber, F_OIDEQ,
 					parentOid);
 
