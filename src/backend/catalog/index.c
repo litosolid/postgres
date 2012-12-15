@@ -1338,7 +1338,44 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	 * swapped here as conindid
 	 * 3) Update field conindid to thew new index Oid on all the foreign keys
 	 */
-	//TODO
+	{
+		ScanKeyData	skey[1];
+		SysScanDesc	conscan;
+		Relation	conRel;
+		HeapTuple	htup;
+
+		/*
+		 * Search pg_constraint for the foreign key constraints associated
+		 * with the index by scanning using conrelid.
+		 */
+		ScanKeyInit(&skey[0],
+					Anum_pg_constraint_conrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					parentOid);
+
+		conRel = heap_open(ConstraintRelationId, AccessShareLock);
+		conscan = systable_beginscan(conRel, ConstraintRelidIndexId, true,
+									 SnapshotNow, 1, skey);
+
+		while (HeapTupleIsValid(htup = systable_getnext(conscan)))
+		{
+			Form_pg_constraint contuple = (Form_pg_constraint) GETSTRUCT(htup);
+
+			/* Check if a foreign constraint uses the index being swapped */
+			if (contuple->contype == CONSTRAINT_FOREIGN &&
+				contuple->conrelid == parentOid &&
+				contuple->conindid == oldIndexOid)
+			{
+				/* Found an index, so update its pg_constraint entry */
+				contuple->conindid = newIndexOid;
+				/* And write it back in place */
+				heap_inplace_update(conRel, htup);
+			}
+		}
+
+		systable_endscan(conscan);
+		heap_close(conRel, AccessShareLock);
+	}
 }
 
 /*
