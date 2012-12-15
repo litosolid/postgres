@@ -1363,7 +1363,7 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 
 			/* Check if a foreign constraint uses the index being swapped */
 			if (contuple->contype == CONSTRAINT_FOREIGN &&
-				contuple->conrelid == parentOid &&
+				contuple->confrelid == parentOid &&
 				contuple->conindid == oldIndexOid)
 			{
 				/* Found an index, so update its pg_constraint entry */
