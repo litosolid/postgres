@@ -1323,6 +1323,22 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 		/* Close parent relation */
 		heap_close(pg_class, RowExclusiveLock);
 	}
+
+	/*
+	 * Switch foreign key dependencies of old index to new index. All the other
+	 * constraints types are already duplicated with the new index thanks to the
+	 * creation done with index_create but indexes that used as a reference for
+	 * foreign keys need to be modified manually directly to the new index to
+	 * avoid any dependency problems at the old index drop phase.
+	 * So here the following process is done to update the foreign keys
+	 * referencing the index being swapped:
+	 * 1) Scan pg_constraint and extract the list of foreign keys that use the
+	 * parent relation of the index being swapped as conrelid.
+	 * 2) Check in this list the foreign keys that use the old index being
+	 * swapped here as conindid
+	 * 3) Update field conindid to thew new index Oid on all the foreign keys
+	 */
+	//TODO
 }
 
 /*
