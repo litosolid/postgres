@@ -1277,6 +1277,15 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 {
 	char		   *nameNew, *nameOld, *nameTemp;
 	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
+	Relation		oldIndexRel, newIndexRel;
+
+	/*
+	 * Take a lock on the old and new index before switching their names. This
+	 * avoids having index swapping relying on relation renaming mechanism to
+	 * get a lock on the relations involved.
+	 */
+	oldIndexRel = relation_open(oldIndexOid, AccessExclusiveLock);
+	newIndexRel = relation_open(newIndexOid, AccessExclusiveLock);
 
 	/* Allocate all the names used for this operation */
 	nameNew = get_rel_name(newIndexOid);
@@ -1304,6 +1313,10 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 
 	/* Make the catalog update visible */
 	CommandCounterIncrement();
+
+	/* The lock taken previously is not released until the end of transaction */
+	relation_close(oldIndexRel, NoLock);
+	relation_close(newIndexRel, NoLock);
 
 	/*
 	 * If the index swapped is a toast index, take an exclusive lock on its
