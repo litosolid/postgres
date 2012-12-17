@@ -1325,67 +1325,10 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	}
 
 	/*
-	 * Switch foreign key dependencies of old index to new index. All the other
-	 * constraints types are already duplicated with the new index thanks to the
-	 * creation done with index_create but indexes that used as a reference for
-	 * foreign keys need to be modified manually directly to the new index to
-	 * avoid any dependency problems at the old index drop phase.
-	 * So here the following process is done to update the foreign keys
-	 * referencing the index being swapped:
-	 * 1) Scan pg_constraint and extract the list of foreign keys that use the
-	 * parent relation of the index being swapped as conrelid.
-	 * 2) Check in this list the foreign keys that use the old index being
-	 * swapped here as conindid
-	 * 3) Update field conindid to thew new index Oid on all the foreign keys
+	 * Scan for potential foreign keys on the index being swapped and change its
+	 * dependencies to the new index created concurrently.
 	 */
-	{
-		ScanKeyData	skey[1];
-		SysScanDesc	conscan;
-		Relation	conRel;
-		HeapTuple	htup;
-
-		/*
-		 * Search pg_constraint for the foreign key constraints associated
-		 * with the index by scanning using conrelid.
-		 */
-		ScanKeyInit(&skey[0],
-					Anum_pg_constraint_confrelid,
-					BTEqualStrategyNumber, F_OIDEQ,
-					ObjectIdGetDatum(parentOid));
-
-		conRel = heap_open(ConstraintRelationId, AccessShareLock);
-		conscan = systable_beginscan(conRel, ConstraintForeignRelidIndexId,
-									 true, SnapshotNow, 1, skey);
-
-		while (HeapTupleIsValid(htup = systable_getnext(conscan)))
-		{
-			Form_pg_constraint contuple = (Form_pg_constraint) GETSTRUCT(htup);
-
-			/* Check if a foreign constraint uses the index being swapped */
-			if (contuple->contype == CONSTRAINT_FOREIGN &&
-				contuple->confrelid == parentOid &&
-				contuple->conindid == oldIndexOid)
-			{
-				/* Found an index, so update its pg_constraint entry */
-				contuple->conindid = newIndexOid;
-				/* And write it back in place */
-				heap_inplace_update(conRel, htup);
-
-				/*
-				 * Switch all the dependencies of this foreign key from the
-				 * old index to the new index.
-				 */
-				changeDependencyFor(ConstraintRelationId,
-									HeapTupleGetOid(htup),
-									RelationRelationId,
-									oldIndexOid,
-									newIndexOid);
-			}
-		}
-
-		systable_endscan(conscan);
-		heap_close(conRel, AccessShareLock);
-	}
+	switchIndexConstraintOnForeignKey(parentOid, oldIndexOid, newIndexOid);
 }
 
 /*
