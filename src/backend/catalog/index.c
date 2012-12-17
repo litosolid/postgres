@@ -736,8 +736,7 @@ index_create(Relation heapRelation,
 
 	if (!allow_system_table_mods &&
 		IsSystemRelation(heapRelation) &&
-		IsNormalProcessingMode() &&
-		!is_reindex)
+		IsNormalProcessingMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("user-defined indexes on system catalog tables are not supported")));
