@@ -921,11 +921,14 @@ CREATE TABLE concur_reindex_tab (c1 int);
 REINDEX TABLE concur_reindex_tab; -- notice
 REINDEX TABLE CONCURRENTLY concur_reindex_tab; -- notice
 ALTER TABLE concur_reindex_tab ADD COLUMN c2 text; -- add toast index
-CREATE INDEX concur_reindex_tab1 ON concur_reindex_tab(c1);
-CREATE INDEX concur_reindex_tab2 ON concur_reindex_tab(c2);
+CREATE UNIQUE INDEX concur_reindex_ind1 ON concur_reindex_tab(c1);
+CREATE INDEX concur_reindex_ind2 ON concur_reindex_tab(c2);
+-- Create table for check on foreign key dependence switch with indexes swapped
+ALTER TABLE concur_reindex_tab ADD PRIMARY KEY USING INDEX concur_reindex_ind1;
+CREATE TABLE concur_reindex_tab2 (c1 int REFERENCES concur_reindex_tab);
 INSERT INTO concur_reindex_tab VALUES  (1, 'a');
 INSERT INTO concur_reindex_tab VALUES  (2, 'a');
-REINDEX INDEX CONCURRENTLY concur_reindex_tab1;
+REINDEX INDEX CONCURRENTLY concur_reindex_ind1;
 REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 
 -- Check errors
@@ -939,4 +942,4 @@ REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
 
 -- Check the relation status, there should not be invalid indexes
 \d concur_reindex_tab
-DROP TABLE concur_reindex_tab;
+DROP TABLE concur_reindex_tab, concur_reindex_tab2;

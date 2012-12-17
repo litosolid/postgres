@@ -1370,6 +1370,16 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 				contuple->conindid = newIndexOid;
 				/* And write it back in place */
 				heap_inplace_update(conRel, htup);
+
+				/*
+				 * Switch all the dependencies of this foreign key from the
+				 * old index to the new index.
+				 */
+				changeDependencyFor(ConstraintRelationId,
+									HeapTupleGetOid(htup),
+									RelationRelationId,
+									oldIndexOid,
+									newIndexOid);
 			}
 		}
 
