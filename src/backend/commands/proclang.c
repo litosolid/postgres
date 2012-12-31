@@ -51,16 +51,16 @@ typedef struct
 	char	   *tmpllibrary;	/* path of shared library */
 } PLTemplate;
 
-static void create_proc_lang(const char *languageName, bool replace,
-				 Oid languageOwner, Oid handlerOid, Oid inlineOid,
-				 Oid valOid, bool trusted);
+static Oid create_proc_lang(const char *languageName, bool replace,
+							Oid languageOwner, Oid handlerOid, Oid inlineOid,
+							Oid valOid, bool trusted);
 static PLTemplate *find_language_template(const char *languageName);
 
 /* ---------------------------------------------------------------------
  * CREATE PROCEDURAL LANGUAGE
  * ---------------------------------------------------------------------
  */
-void
+Oid
 CreateProceduralLanguage(CreatePLangStmt *stmt)
 {
 	PLTemplate *pltemplate;
@@ -225,9 +225,9 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 			valOid = InvalidOid;
 
 		/* ok, create it */
-		create_proc_lang(stmt->plname, stmt->replace, GetUserId(),
-						 handlerOid, inlineOid,
-						 valOid, pltemplate->tmpltrusted);
+		return create_proc_lang(stmt->plname, stmt->replace, GetUserId(),
+								handlerOid, inlineOid,
+								valOid, pltemplate->tmpltrusted);
 	}
 	else
 	{
@@ -300,16 +300,16 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 			valOid = InvalidOid;
 
 		/* ok, create it */
-		create_proc_lang(stmt->plname, stmt->replace, GetUserId(),
-						 handlerOid, inlineOid,
-						 valOid, stmt->pltrusted);
+		return create_proc_lang(stmt->plname, stmt->replace, GetUserId(),
+								handlerOid, inlineOid,
+								valOid, stmt->pltrusted);
 	}
 }
 
 /*
  * Guts of language creation.
  */
-static void
+static Oid
 create_proc_lang(const char *languageName, bool replace,
 				 Oid languageOwner, Oid handlerOid, Oid inlineOid,
 				 Oid valOid, bool trusted)
@@ -433,6 +433,8 @@ create_proc_lang(const char *languageName, bool replace,
 						   LanguageRelationId, myself.objectId, 0, NULL);
 
 	heap_close(rel, RowExclusiveLock);
+
+	return myself.objectId;
 }
 
 /*
@@ -537,9 +539,10 @@ DropProceduralLanguageById(Oid langOid)
 /*
  * Rename language
  */
-void
+Oid
 RenameLanguage(const char *oldname, const char *newname)
 {
+	Oid			lanId;
 	HeapTuple	tup;
 	Relation	rel;
 
@@ -550,6 +553,8 @@ RenameLanguage(const char *oldname, const char *newname)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("language \"%s\" does not exist", oldname)));
+
+	lanId = HeapTupleGetOid(tup);
 
 	/* make sure the new name doesn't exist */
 	if (SearchSysCacheExists1(LANGNAME, CStringGetDatum(newname)))
@@ -569,6 +574,8 @@ RenameLanguage(const char *oldname, const char *newname)
 
 	heap_close(rel, NoLock);
 	heap_freetuple(tup);
+
+	return lanId;
 }
 
 /*

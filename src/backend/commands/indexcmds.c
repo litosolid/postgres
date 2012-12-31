@@ -2122,7 +2122,7 @@ ChooseIndexColumnNames(List *indexElems)
  * ReindexIndex
  *		Recreate a specific index.
  */
-void
+Oid
 ReindexIndex(RangeVar *indexRelation, bool concurrent)
 {
 	Oid			indOid;
@@ -2134,15 +2134,13 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 				RangeVarCallbackForReindexIndex,
 				(void *) &heapOid);
 
-	/* This is all for the non-concurrent case */
+	/* Continue process for concurrent or non-concurrent case */
 	if (!concurrent)
-	{
 		reindex_index(indOid, false);
-		return;
-	}
+	else
+		ReindexRelationsConcurrently(list_make1_oid(indOid));
 
-	/* Continue through REINDEX CONCURRENTLY */
-	ReindexRelationsConcurrently(list_make1_oid(indOid));
+	return indOid;
 }
 
 /*
@@ -2209,7 +2207,7 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
  * ReindexTable
  *		Recreate all indexes of a table (and of its toast table, if any)
  */
-void
+Oid
 ReindexTable(RangeVar *relation, bool concurrent)
 {
 	Oid			heapOid;
@@ -2226,13 +2224,15 @@ ReindexTable(RangeVar *relation, bool concurrent)
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
 						relation->relname)));
-		return;
+		return heapOid;
 	}
 
 	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST))
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
 						relation->relname)));
+
+	return heapOid;
 }
 
 /*
@@ -2243,7 +2243,7 @@ ReindexTable(RangeVar *relation, bool concurrent)
  * separate transaction, so we can release the lock on it right away.
  * That means this must not be called within a user transaction block!
  */
-void
+Oid
 ReindexDatabase(const char *databaseName,
 				bool do_system,
 				bool do_user,
@@ -2362,4 +2362,6 @@ ReindexDatabase(const char *databaseName,
 	StartTransactionCommand();
 
 	MemoryContextDelete(private_context);
+
+	return MyDatabaseId;
 }
