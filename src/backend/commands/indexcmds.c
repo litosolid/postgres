@@ -1214,7 +1214,7 @@ ReindexRelationsConcurrently(List *relationIds)
 		 * to reduce likelihood of deadlock as ShareUpdateExclusiveLock is
 		 * already taken within session.
 		 */
-		indexRel = index_open(indOid, AccessExclusiveLock);
+		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
 		indexParentRel = heap_open(indexRel->rd_index->indrelid,
 								   ShareUpdateExclusiveLock);
 

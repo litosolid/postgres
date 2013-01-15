@@ -1447,8 +1447,35 @@ index_concurrent_drop(Oid indexOid)
 	ListCell	   *lc;
 	Oid				constraintOid = get_index_constraint(indexOid);
 	ObjectAddress	object;
+	Form_pg_index	indexForm;
+	Relation		pg_index;
+	HeapTuple		indexTuple;
+	bool			indislive;
 
-	/* Register constraint or index for drop */
+	/*
+	 * Check that the index dropped here is not alive, it might be used by
+	 * other backends in this case.
+	 */
+	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID,
+									 ObjectIdGetDatum(indexOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indexOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+	indislive = indexForm->indislive;
+
+	/* Clean up */
+	heap_close(pg_index, RowExclusiveLock);
+
+	/* Leave if index is still alive */
+	if (indislive)
+		return;
+
+	/*
+	 * We are sure to have a dead index, so begin the drop process.
+	 * Register constraint or index for drop.
+	 */
 	if (OidIsValid(constraintOid))
 	{
 		object.classId = ConstraintRelationId;
