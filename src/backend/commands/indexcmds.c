@@ -1281,11 +1281,6 @@ ReindexRelationsConcurrently(List *relationIds)
 		CommitTransactionCommand();
 	}
 
-	StartTransactionCommand();
-
-	/* Get fresh snapshot for next step */
-	PushActiveSnapshot(GetTransactionSnapshot());
-
 	/*
 	 * Phase 6 of REINDEX CONCURRENTLY
 	 *
@@ -1295,7 +1290,36 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * indexes are already considered as dead and invalid, so they will not
 	 * be used by other backends.
 	 */
-	index_concurrent_drop(indexIds);
+	foreach(lc, indexIds)
+	{
+		Oid indexOid = lfirst_oid(lc);
+
+		/* Start transaction to drop this index */
+		StartTransactionCommand();
+
+		/* Get fresh snapshot for next step */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/*
+		 * Open transaction if necessary, for the first index treated its
+		 * transaction has been already opened previously.
+		 */
+		index_concurrent_drop(indexOid);
+
+		/*
+		 * For the last index to be treated, do not commit transaction yet.
+		 * This will be done once all the locks on indexes and parent relations
+		 * are released.
+		 */
+		if (indexOid != llast_oid(indexIds))
+		{
+			/* We can do away with our snapshot */
+			PopActiveSnapshot();
+
+			/* Commit this transaction to make the update visible. */
+			CommitTransactionCommand();
+		}
+	}
 
 	/*
 	 * Last thing to do is release the session-level lock on the parent table

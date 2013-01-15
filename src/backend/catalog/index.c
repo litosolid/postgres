@@ -1435,48 +1435,37 @@ index_concurrent_clear_valid(Relation heapRelation, Oid indexOid)
 /*
  * index_concurrent_drop
  *
- * Drop a list of indexes as the last step of a concurrent process. Deletion is
- * done through performDeletion or dependencies of the index are not dropped.
- * At this point all the indexes are already considered as invalid and dead so
- * they can be dropped without using any concurrent options.
+ * Drop a single index concurrently as the last step of an index concurrent
+ * process Deletion is done through performDeletion or dependencies of the
+ * index are not dropped. At this point all the indexes are already considered
+ * as invalid and dead so they can be dropped without using any concurrent
+ * options.
  */
 void
-index_concurrent_drop(List *indexIds)
+index_concurrent_drop(Oid indexOid)
 {
-	ListCell		   *lc;
-	ObjectAddresses	   *objects = new_object_addresses();
+	ListCell	   *lc;
+	Oid				constraintOid = get_index_constraint(indexOid);
+	ObjectAddress	object;
 
-	Assert(indexIds != NIL);
-
-	/* Scan the list of indexes and build object list for normal indexes */
-	foreach(lc, indexIds)
+	/* Register constraint or index for drop */
+	if (OidIsValid(constraintOid))
 	{
-		Oid				indexOid = lfirst_oid(lc);
-		Oid				constraintOid = get_index_constraint(indexOid);
-		ObjectAddress	object;
-
-		/* Register constraint or index for drop */
-		if (OidIsValid(constraintOid))
-		{
-			object.classId = ConstraintRelationId;
-			object.objectId = constraintOid;
-		}
-		else
-		{
-			object.classId = RelationRelationId;
-			object.objectId = indexOid;
-		}
-
-		object.objectSubId = 0;
-
-		/* Add object to list */
-		add_exact_object_address(&object, objects);
+		object.classId = ConstraintRelationId;
+		object.objectId = constraintOid;
+	}
+	else
+	{
+		object.classId = RelationRelationId;
+		object.objectId = indexOid;
 	}
 
+	object.objectSubId = 0;
+
 	/* Perform deletion for normal and toast indexes */
-	performMultipleDeletions(objects,
-							 DROP_RESTRICT,
-							 0);
+	performDeletion(&object,
+					DROP_RESTRICT,
+					0);
 }
 
 
