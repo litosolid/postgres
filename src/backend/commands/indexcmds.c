@@ -797,7 +797,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * list of relation Oids given by caller. For each element in given list,
 	 * If the relkind of given relation Oid is a table, all its valid indexes
 	 * will be rebuilt, including its associated toast table indexes. If
-	 * relkind is an index, this index itself will be rebuilt.
+	 * relkind is an index, this index itself will be rebuilt. The locks taken
+	 * parent relations and involved indexes are kept until this transaction
+	 * is committed to protect against schema changes that might occur until
+	 * the session lock is taken on each relation.
 	 */
 	foreach(lc, relationIds)
 	{
@@ -837,7 +840,7 @@ ReindexRelationsConcurrently(List *relationIds)
 							indexIds = list_append_unique_oid(indexIds,
 															  cellOid);
 
-						index_close(indexRelation, ShareUpdateExclusiveLock);
+						index_close(indexRelation, NoLock);
 					}
 
 					/* Also add the toast indexes */
@@ -862,13 +865,13 @@ ReindexRelationsConcurrently(List *relationIds)
 							else
 								indexIds = list_append_unique_oid(indexIds, cellOid);
 
-							index_close(indexRelation, ShareUpdateExclusiveLock);
+							index_close(indexRelation, NoLock);
 						}
 
-						heap_close(toastRelation, ShareUpdateExclusiveLock);
+						heap_close(toastRelation, NoLock);
 					}
 
-					heap_close(heapRelation, ShareUpdateExclusiveLock);
+					heap_close(heapRelation, NoLock);
 					break;
 				}
 			case RELKIND_INDEX:
@@ -888,7 +891,7 @@ ReindexRelationsConcurrently(List *relationIds)
 					else
 						indexIds = list_append_unique_oid(indexIds, relationOid);
 
-					index_close(indexRelation, ShareUpdateExclusiveLock);
+					index_close(indexRelation, NoLock);
 					break;
 				}
 			default:
