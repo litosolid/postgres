@@ -1025,20 +1025,24 @@ switchIndexConstraintOnForeignKey(Oid parentOid,
 			contuple->confrelid == parentOid &&
 			contuple->conindid == oldIndexOid)
 		{
-			/* Found an index, so update its pg_constraint entry */
-			contuple->conindid = newIndexOid;
-			/* And write it back in place */
-			heap_inplace_update(conRel, htup);
-
 			/*
-			 * Switch all the dependencies of this foreign key from the
-			 * old index to the new index.
+			 * An index has been found, so first switch  all the dependencies
+			 * of this foreign key from the old index to the new index.
 			 */
 			changeDependencyFor(ConstraintRelationId,
 								HeapTupleGetOid(htup),
 								RelationRelationId,
 								oldIndexOid,
 								newIndexOid);
+
+			/* Then update its pg_constraint entry */
+			htup = heap_copytuple(htup);
+			contuple = (Form_pg_constraint) GETSTRUCT(htup);
+			contuple->conindid = newIndexOid;
+			simple_heap_update(conRel, &htup->t_self, htup);
+
+			/* Update the system catalog indexes */
+			CatalogUpdateIndexes(conRel, htup);
 		}
 	}
 
