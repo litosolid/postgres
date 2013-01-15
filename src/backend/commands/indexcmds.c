@@ -1210,9 +1210,11 @@ ReindexRelationsConcurrently(List *relationIds)
 
 		/*
 		 * Mark the cache of associated relation as invalid, open relation
-		 * relations.
+		 * relations. AccessExclusive Lock is taken here and not a lower lock
+		 * to reduce likelihood of deadlock as ShareUpdateExclusiveLock is
+		 * already taken within session.
 		 */
-		indexRel = index_open(indOid, ShareUpdateExclusiveLock);
+		indexRel = index_open(indOid, AccessExclusiveLock);
 		indexParentRel = heap_open(indexRel->rd_index->indrelid,
 								   ShareUpdateExclusiveLock);
 
