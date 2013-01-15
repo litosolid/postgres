@@ -4,7 +4,7 @@
  *	   routines for accessing the system catalogs
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -20,6 +20,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/nbtree.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/xlog.h"
@@ -350,6 +351,17 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 								  &info->pages, &info->tuples, &allvisfrac);
 				if (info->tuples > rel->tuples)
 					info->tuples = rel->tuples;
+			}
+
+			if (info->relam == BTREE_AM_OID)
+			{
+				/* For btrees, get tree height while we have the index open */
+				info->tree_height = _bt_getrootheight(indexRelation);
+			}
+			else
+			{
+				/* For other index types, just set it to "unknown" for now */
+				info->tree_height = -1;
 			}
 
 			index_close(indexRelation, NoLock);

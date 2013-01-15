@@ -9,7 +9,7 @@
  *	  polluting the namespace with lots of stuff...
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/c.h
@@ -746,6 +746,18 @@ typedef NameData *Name;
 	((void) StaticAssertExpr(sizeof(varname) == sizeof(typename),		\
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #endif /* HAVE__BUILTIN_TYPES_COMPATIBLE_P */
+
+
+/*
+ * Mark a point as unreachable in a portable fashion.  This should preferably
+ * be something that the compiler understands, to aid code generation.
+ * In assert-enabled builds, we prefer abort() for debugging reasons.
+ */
+#if defined(HAVE__BUILTIN_UNREACHABLE) && !defined(USE_ASSERT_CHECKING)
+#define pg_unreachable() __builtin_unreachable()
+#else
+#define pg_unreachable() abort()
+#endif
 
 
 /*

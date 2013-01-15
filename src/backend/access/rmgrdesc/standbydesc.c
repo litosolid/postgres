@@ -3,7 +3,7 @@
  * standbydesc.c
  *    rmgr descriptor routines for storage/ipc/standby.c
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -57,7 +57,7 @@ standby_desc(StringInfo buf, uint8 xl_info, char *rec)
 	{
 		xl_running_xacts *xlrec = (xl_running_xacts *) rec;
 
-		appendStringInfo(buf, " running xacts:");
+		appendStringInfo(buf, "running xacts:");
 		standby_desc_running_xacts(buf, xlrec);
 	}
 	else
