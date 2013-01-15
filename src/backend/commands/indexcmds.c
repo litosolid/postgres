@@ -1087,12 +1087,6 @@ ReindexRelationsConcurrently(List *relationIds)
 		 */
 		index_set_state_flags(concurrentOid, INDEX_CREATE_SET_READY);
 
-		/*
-		 * Invalidate the relcache for the table, so that after this commit all
-		 * sessions will refresh any cached plans taht might reference the index.
-		 */
-		CacheInvalidateRelcacheByRelid(relOid);
-
 		/* we can do away with our snapshot */
 		PopActiveSnapshot();
 
