@@ -937,7 +937,6 @@ BEGIN;
 REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 COMMIT;
 REINDEX TABLE CONCURRENTLY pg_database; -- no shared relation
-REINDEX DATABASE CONCURRENTLY postgres; -- not allowed for DATABASE
 REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
 
 -- Check the relation status, there should not be invalid indexes

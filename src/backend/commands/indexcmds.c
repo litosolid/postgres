@@ -1330,9 +1330,6 @@ ReindexRelationsConcurrently(List *relationIds)
 		UnlockRelationIdForSession(&lockRel, ShareUpdateExclusiveLock);
 	}
 
-	/* We can do away with our snapshot */
-	PopActiveSnapshot();
-
 	return true;
 }
 
@@ -2282,8 +2279,11 @@ ReindexDatabase(const char *databaseName,
 
 	AssertArg(databaseName);
 
-	/* CONCURRENTLY operation is not allowed for a database */
-	if (concurrent && do_system)
+	/*
+	 * CONCURRENTLY operation is not allowed for a system, but it is for a
+	 * database.
+	 */
+	if (concurrent && !do_user)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot reindex system concurrently")));
@@ -2370,15 +2370,40 @@ ReindexDatabase(const char *databaseName,
 	foreach(l, relids)
 	{
 		Oid			relid = lfirst_oid(l);
+		bool		result = false;
+		bool		process_concurrent;
 
 		StartTransactionCommand();
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST))
+
+		/* Determine if relation needs to be processed concurrently */
+		process_concurrent = concurrent &&
+			!IsSystemNamespace(get_rel_namespace(relid));
+
+		/*
+		 * Reindex relation with a concurrent or non-concurrent process.
+		 * System relations cannot be reindexed concurrently, but they
+		 * need to be reindexed including pg_class with a normal process
+		 * as they could be corrupted, and concurrent process might also
+		 * use them. This does not include toast relations, which are
+		 * reindexed when their parent relation is processed.
+		 */
+		if (process_concurrent)
+		{
+			old = MemoryContextSwitchTo(private_context);
+			result = ReindexRelationsConcurrently(list_make1_oid(relid));
+			MemoryContextSwitchTo(old);
+		}
+		else
+			result = reindex_relation(relid, REINDEX_REL_PROCESS_TOAST);
+
+		if (result)
 			ereport(NOTICE,
-					(errmsg("table \"%s.%s\" was reindexed",
+					(errmsg("table \"%s.%s\" was reindexed%s",
 							get_namespace_name(get_rel_namespace(relid)),
-							get_rel_name(relid))));
+							get_rel_name(relid),
+							process_concurrent ? " concurrently" : "")));
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 	}

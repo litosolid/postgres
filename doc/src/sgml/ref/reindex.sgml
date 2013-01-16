@@ -333,6 +333,16 @@ Indexes:
     <command>CONCURRENTLY</> is not supported.
    </para>
 
+   <para>
+    <command>REINDEX SYSTEM</command> does not support <command>CONCURRENTLY
+    </command>.
+   </para>
+
+   <para>
+    <command>REINDEX DATABASE</command> used with <command>CONCURRENTLY
+    </command> rebuilds concurrently only the non-system indexes. System
+    indexes are rebuilt with a non-concurrent context.
+   </para>
   </refsect2>
  </refsect1>
 
@@ -365,7 +375,17 @@ $ <userinput>psql broken_db</userinput>
 ...
 broken_db=&gt; REINDEX DATABASE broken_db;
 broken_db=&gt; \q
-</programlisting></para>
+</programlisting>
+  </para>
+
+  <para>
+   Rebuild a table concurrently:
+
+<programlisting>
+REINDEX TABLE CONCURRENTLY my_broken_table;
+</programlisting>
+  </para>
+
  </refsect1>
 
  <refsect1>

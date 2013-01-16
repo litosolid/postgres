@@ -2748,8 +2748,6 @@ ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
 REINDEX TABLE CONCURRENTLY pg_database; -- no shared relation
 ERROR:  concurrent reindex is not supported for shared relations
-REINDEX DATABASE CONCURRENTLY postgres; -- not allowed for DATABASE
-ERROR:  cannot reindex system concurrently
 REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
 ERROR:  cannot reindex system concurrently
 -- Check the relation status, there should not be invalid indexes
