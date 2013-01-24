@@ -1366,22 +1366,13 @@ index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
 
 	/*
 	 * Now we must wait until no running transaction could be using the
-	 * index for a query.  To do this, inquire which xacts currently would
-	 * conflict with AccessExclusiveLock on the table -- ie, which ones
-	 * have a lock of any kind on the table. Then wait for each of these
-	 * xacts to commit or abort. Note we do not need to worry about xacts
-	 * that open the table for reading after this point; they will see the
-	 * index as invalid when they open the relation.
+	 * index for a query.
 	 *
 	 * Note: the reason we use actual lock acquisition here, rather than
 	 * just checking the ProcArray and sleeping, is that deadlock is
 	 * possible if one of the transactions in question is blocked trying
-	 * to acquire an exclusive lock on our table.  The lock code will
+	 * to acquire an exclusive lock on our table. The lock code will
 	 * detect deadlock and error out properly.
-	 *
-	 * Note: GetLockConflicts() never reports our own xid, hence we need
-	 * not check for that.	Also, prepared xacts are not reported, which
-	 * is fine since they certainly aren't going to do anything more.
 	 */
 	WaitForVirtualLocks(locktag, AccessExclusiveLock);
 

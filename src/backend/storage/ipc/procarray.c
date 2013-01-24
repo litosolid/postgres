@@ -2532,11 +2532,14 @@ XidCacheRemoveRunningXids(TransactionId xid,
 /*
  * WaitForVirtualLocks
  *
- * Wait until no transaction can have the table open with the index marked as
- * read-only for updates.
- * To do this, inquire which xacts currently would conflict with ShareLock on
+ * Wait until no transaction hold the relation related to lock this lock.
+ * To do this, inquire which xacts currently would conflict with this lock on
  * the table referred by the LOCKTAG -- ie, which ones have a lock that permits
- * writing the table. Then wait for each of these xacts to commit or abort.
+ * writing the relation. Then wait for each of these xacts to commit or abort.
+ *
+ * To do this, inquire which xacts currently would conflict with lockmode
+ * on the relation.
+ *
  * Note: GetLockConflicts() never reports our own xid, hence we need not
  * check for that.  Also, prepared xacts are not reported, which is fine
  * since they certainly aren't going to do anything more.
