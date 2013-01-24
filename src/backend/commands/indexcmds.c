@@ -833,7 +833,7 @@ ReindexRelationsConcurrently(List *relationIds)
 						if (!indexRelation->rd_index->indisvalid)
 							ereport(WARNING,
 									(errcode(ERRCODE_INDEX_CORRUPTED),
-									 errmsg("cannot reindex concurrently invalid index \"%s.%s\", bypassing",
+									 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 											get_namespace_name(get_rel_namespace(cellOid)),
 											get_rel_name(cellOid))));
 						else
@@ -859,7 +859,7 @@ ReindexRelationsConcurrently(List *relationIds)
 							if (!indexRelation->rd_index->indisvalid)
 								ereport(WARNING,
 										(errcode(ERRCODE_INDEX_CORRUPTED),
-										 errmsg("cannot reindex concurrently invalid index \"%s.%s\", bypassing",
+										 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 												get_namespace_name(get_rel_namespace(cellOid)),
 												get_rel_name(cellOid))));
 							else
@@ -885,7 +885,7 @@ ReindexRelationsConcurrently(List *relationIds)
 					if (!indexRelation->rd_index->indisvalid)
 						ereport(WARNING,
 								(errcode(ERRCODE_INDEX_CORRUPTED),
-								 errmsg("cannot reindex concurrently invalid index \"%s.%s\", bypassing",
+								 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 										get_namespace_name(get_rel_namespace(relationOid)),
 										get_rel_name(relationOid))));
 					else
