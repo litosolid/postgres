@@ -1277,7 +1277,19 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 {
 	char		   *nameNew, *nameOld, *nameTemp;
 	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
-	Relation		oldIndexRel, newIndexRel;
+	Relation		oldIndexRel, newIndexRel, parentRel;
+
+	/*
+	 * If the index swapped is a toast index, take a row exclusive lock on its
+	 * parent toast relation before the involved indexes, it is necessary to
+	 * take a lock before the indexes on the toast table as in this case
+	 * the reltoastidxid is updated to the new index Oid.
+	 */
+	if (get_rel_relkind(parentOid) == RELKIND_TOASTVALUE)
+	{
+		/* Open pg_class and fetch a writable copy of the relation tuple */
+		parentRel = heap_open(parentOid, RowExclusiveLock);
+	}
 
 	/*
 	 * Take a lock on the old and new index before switching their names. This
@@ -1325,16 +1337,11 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 	 */
 	if (get_rel_relkind(parentOid) == RELKIND_TOASTVALUE)
 	{
-		Relation	pg_class;
-
-		/* Open pg_class and fetch a writable copy of the relation tuple */
-		pg_class = heap_open(parentOid, RowExclusiveLock);
-
 		/* Update the statistics of this pg_class entry with new toast index Oid */
-		index_update_stats(pg_class, false, false, newIndexOid, -1.0);
+		index_update_stats(parentRel, false, false, newIndexOid, -1.0);
 
 		/* Close parent relation */
-		heap_close(pg_class, RowExclusiveLock);
+		heap_close(parentRel, RowExclusiveLock);
 	}
 
 	/*
@@ -1445,7 +1452,6 @@ index_concurrent_clear_valid(Relation heapRelation, Oid indexOid)
 void
 index_concurrent_drop(Oid indexOid)
 {
-	ListCell	   *lc;
 	Oid				constraintOid = get_index_constraint(indexOid);
 	ObjectAddress	object;
 	Form_pg_index	indexForm;
