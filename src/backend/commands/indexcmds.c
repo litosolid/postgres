@@ -1727,7 +1727,7 @@ GetIndexOpClass(List *opclass, Oid attrType,
 		/* Look in specific schema only */
 		Oid			namespaceId;
 
-		namespaceId = LookupExplicitNamespace(schemaname);
+		namespaceId = LookupExplicitNamespace(schemaname, false);
 		tuple = SearchSysCache3(CLAAMNAMENSP,
 								ObjectIdGetDatum(accessMethodId),
 								PointerGetDatum(opcname),
