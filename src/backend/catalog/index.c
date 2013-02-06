@@ -1375,7 +1375,7 @@ index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG *locktag)
 	 * detect deadlock and error out properly.
 	 */
 	if (locktag)
-		WaitForVirtualLocks(locktag, AccessExclusiveLock);
+		WaitForVirtualLocks(*locktag, AccessExclusiveLock);
 
 	/*
 	 * No more predicate locks will be acquired on this index, and we're
@@ -1836,7 +1836,7 @@ index_drop(Oid indexId, bool concurrent)
 		StartTransactionCommand();
 
 		/* Finish invalidation of index and mark it as dead */
-		index_concurrent_set_dead(indexId, heapId, &heaplocktag, false);
+		index_concurrent_set_dead(indexId, heapId, &heaplocktag);
 
 		/*
 		 * Again, commit the transaction to make the pg_index update visible
