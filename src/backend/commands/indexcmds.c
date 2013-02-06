@@ -51,6 +51,17 @@
 #include "utils/syscache.h"
 #include "utils/tqual.h"
 
+/*
+ * Structures related to REINDEX CONCURRENTLY
+ */
+#define REINDEX_TAB_HASH_SIZE	16
+
+/* Entries of hash table for REINDEX CONCURRENTLY process */
+typedef struct ReindexConcurrentlyEntry
+{
+	Oid		indexOid;
+	Oid		concurrentOid;
+} ReindexConcurrentlyEntry;
 
 /* non-export function prototypes */
 static void CheckPredicate(Expr *predicate);
@@ -784,13 +795,26 @@ DefineIndex(IndexStmt *stmt,
 bool
 ReindexRelationsConcurrently(List *relationIds)
 {
-	List	   *concurrentIndexIds = NIL,
-			   *indexIds = NIL,
-			   *parentRelationIds = NIL,
+	List	   *parentRelationIds = NIL,
 			   *lockTags = NIL,
 			   *relationLocks = NIL;
 	ListCell   *lc, *lc2;
 	Snapshot	snapshot;
+	HTAB	   *indexTab;
+	HASHCTL		hash_ctl;
+	HASH_SEQ_STATUS hscan;
+	ReindexConcurrentlyEntry *entry;
+	int			count;
+
+	/* Create the hash table for index entries */
+	memset(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = sizeof(Oid);
+	hash_ctl.entrysize = sizeof(ReindexConcurrentlyEntry);
+	hash_ctl.hash = oid_hash;
+	indexTab = hash_create("Reindex Concurrently hash",
+						   REINDEX_TAB_HASH_SIZE,
+						   &hash_ctl,
+						   HASH_ELEM | HASH_FUNCTION);
 
 	/*
 	 * Extract the list of indexes that are going to be rebuilt based on the
@@ -836,9 +860,16 @@ ReindexRelationsConcurrently(List *relationIds)
 									 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 											get_namespace_name(get_rel_namespace(cellOid)),
 											get_rel_name(cellOid))));
-						else
-							indexIds = list_append_unique_oid(indexIds,
-															  cellOid);
+						else if (hash_search(indexTab,
+											 (void *) &cellOid,
+											 HASH_FIND, NULL) == NULL)
+						{
+							/* Add a new index entry */
+							entry = hash_search(indexTab, (void *) &cellOid,
+												HASH_ENTER, NULL);
+							entry->indexOid = cellOid;
+							entry->concurrentOid = InvalidOid;
+						}
 
 						index_close(indexRelation, NoLock);
 					}
@@ -862,8 +893,16 @@ ReindexRelationsConcurrently(List *relationIds)
 										 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 												get_namespace_name(get_rel_namespace(cellOid)),
 												get_rel_name(cellOid))));
-							else
-								indexIds = list_append_unique_oid(indexIds, cellOid);
+							else if (hash_search(indexTab,
+												 (void *) &cellOid,
+												 HASH_FIND, NULL) == NULL)
+							{
+								/* Add a new index entry */
+								entry = hash_search(indexTab, (void *) &cellOid,
+													HASH_ENTER, NULL);
+								entry->indexOid = cellOid;
+								entry->concurrentOid = InvalidOid;
+							}
 
 							index_close(indexRelation, NoLock);
 						}
@@ -888,8 +927,16 @@ ReindexRelationsConcurrently(List *relationIds)
 								 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
 										get_namespace_name(get_rel_namespace(relationOid)),
 										get_rel_name(relationOid))));
-					else
-						indexIds = list_append_unique_oid(indexIds, relationOid);
+					else if (hash_search(indexTab,
+										 (void *) &relationOid,
+										 HASH_FIND, NULL) == NULL)
+					{
+						/* Add a new index entry */
+						entry = hash_search(indexTab, (void *) &relationOid,
+											HASH_ENTER, NULL);
+						entry->indexOid = relationOid;
+						entry->concurrentOid = InvalidOid;
+					}
 
 					index_close(indexRelation, NoLock);
 					break;
@@ -901,8 +948,11 @@ ReindexRelationsConcurrently(List *relationIds)
 	}
 
 	/* Definetely no indexes, so leave */
-	if (indexIds == NIL)
+	if (hash_get_num_entries(indexTab) == 0)
+	{
+		hash_destroy(indexTab);
 		return false;
+	}
 
 	/*
 	 * Build a unique list of parent relation Oids based on the extracted index
@@ -910,9 +960,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * relations of indexes to prevent concurrent drop of relations involved by
 	 * the concurrent reindex.
 	 */
-	foreach(lc, indexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
-		Oid parentOid = IndexGetRelation(lfirst_oid(lc), false);
+		Oid parentOid = IndexGetRelation(entry->indexOid, false);
 		parentRelationIds = list_append_unique_oid(parentRelationIds, parentOid);
 	}
 
@@ -928,11 +979,12 @@ ReindexRelationsConcurrently(List *relationIds)
 	 */
 
 	/* Do the concurrent index creation for each index */
-	foreach(lc, indexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
 		char	   *concurrentName;
-		Oid			indOid = lfirst_oid(lc);
-		Oid			concurrentOid = InvalidOid;
+		Oid			indOid = entry->indexOid;
+		Oid			concurrentOid = entry->concurrentOid;
 		Relation	indexRel,
 					indexParentRel,
 					indexConcurrentRel;
@@ -963,8 +1015,8 @@ ReindexRelationsConcurrently(List *relationIds)
 		 */
 		indexConcurrentRel = index_open(concurrentOid, ShareUpdateExclusiveLock);
 
-		/* Save the concurrent index Oid */
-		concurrentIndexIds = lappend_oid(concurrentIndexIds, concurrentOid);
+		/* Register concurrent index Oid in hash entry */
+		entry->concurrentOid = concurrentOid;
 
 		/*
 		 * Save lockrelid to protect each concurrent relation from drop then
@@ -1045,17 +1097,13 @@ ReindexRelationsConcurrently(List *relationIds)
 	CommitTransactionCommand();
 
 	/* Get the first element of concurrent index list */
-	lc2 = list_head(concurrentIndexIds);
-
-	foreach(lc, indexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
 		Relation	indexRel;
-		Oid			indOid = lfirst_oid(lc);
-		Oid			concurrentOid = lfirst_oid(lc2);
+		Oid			indOid = entry->indexOid;
+		Oid			concurrentOid = entry->concurrentOid;
 		bool		primary;
-
-		/* Move to next concurrent item */
-		lc2 = lnext(lc2);
 
 		/* Start new transaction for this index concurrent build */
 		StartTransactionCommand();
@@ -1091,7 +1139,6 @@ ReindexRelationsConcurrently(List *relationIds)
 		CommitTransactionCommand();
 	}
 
-
 	/*
 	 * Phase 3 of REINDEX CONCURRENTLY
 	 *
@@ -1108,9 +1155,10 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * Perform a scan of each concurrent index with the heap, then insert
 	 * any missing index entries.
 	 */
-	foreach(lc, concurrentIndexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
-		Oid indOid = lfirst_oid(lc);
+		Oid indOid = entry->concurrentOid;
 		Oid relOid;
 
 		/* Open separate transaction to validate index */
@@ -1168,18 +1216,13 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * by other backends once its associated transaction is committed.
 	 */
 
-	/* Get the first element is concurrent index list */
-	lc2 = list_head(concurrentIndexIds);
-
 	/* Swap and mark all the indexes involved in the relation */
-	foreach(lc, indexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
-		Oid			indOid = lfirst_oid(lc);
-		Oid			concurrentOid = lfirst_oid(lc2);
+		Oid			indOid = entry->indexOid;
+		Oid			concurrentOid = entry->concurrentOid;
 		Relation	indexRel, indexParentRel;
-
-		/* Move to next concurrent item */
-		lc2 = lnext(lc2);
 
 		/*
 		 * Each index needs to be swapped in a separate transaction, so start
@@ -1227,10 +1270,11 @@ ReindexRelationsConcurrently(List *relationIds)
 	 */
 
 	/* Mark the old indexes as not ready */
-	foreach(lc, indexIds)
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
 		LOCKTAG	   *heapLockTag;
-		Oid			indOid = lfirst_oid(lc);
+		Oid			indOid = entry->indexOid;
 		Oid			relOid;
 
 		StartTransactionCommand();
@@ -1265,9 +1309,11 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * indexes are already considered as dead and invalid, so they will not
 	 * be used by other backends.
 	 */
-	foreach(lc, indexIds)
+	count = 1;
+	hash_seq_init(&hscan, indexTab);
+	while ((entry = (ReindexConcurrentlyEntry *) hash_seq_search(&hscan)) != NULL)
 	{
-		Oid indexOid = lfirst_oid(lc);
+		Oid indexOid = entry->indexOid;
 
 		/* Start transaction to drop this index */
 		StartTransactionCommand();
@@ -1286,7 +1332,7 @@ ReindexRelationsConcurrently(List *relationIds)
 		 * This will be done once all the locks on indexes and parent relations
 		 * are released.
 		 */
-		if (indexOid != llast_oid(indexIds))
+		if (hash_get_num_entries(indexTab) != count)
 		{
 			/* We can do away with our snapshot */
 			PopActiveSnapshot();
@@ -1294,6 +1340,8 @@ ReindexRelationsConcurrently(List *relationIds)
 			/* Commit this transaction to make the update visible. */
 			CommitTransactionCommand();
 		}
+
+		count++;
 	}
 
 	/*
@@ -1305,6 +1353,9 @@ ReindexRelationsConcurrently(List *relationIds)
 		LockRelId lockRel = * (LockRelId *) lfirst(lc);
 		UnlockRelationIdForSession(&lockRel, ShareUpdateExclusiveLock);
 	}
+
+	/* Clean up */
+	hash_destroy(indexTab);
 
 	return true;
 }
