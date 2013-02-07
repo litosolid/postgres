@@ -1359,14 +1359,14 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
  * seen by all the backends as dead.
  */
 void
-index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
+index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG *locktag)
 {
 	Relation	heapRelation;
 	Relation	indexRelation;
 
 	/*
 	 * Now we must wait until no running transaction could be using the
-	 * index for a query.
+	 * index for a query if necessary.
 	 *
 	 * Note: the reason we use actual lock acquisition here, rather than
 	 * just checking the ProcArray and sleeping, is that deadlock is
@@ -1374,7 +1374,8 @@ index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG locktag)
 	 * to acquire an exclusive lock on our table. The lock code will
 	 * detect deadlock and error out properly.
 	 */
-	WaitForVirtualLocks(locktag, AccessExclusiveLock);
+	if (locktag)
+		WaitForVirtualLocks(locktag, AccessExclusiveLock);
 
 	/*
 	 * No more predicate locks will be acquired on this index, and we're
@@ -1835,7 +1836,7 @@ index_drop(Oid indexId, bool concurrent)
 		StartTransactionCommand();
 
 		/* Finish invalidation of index and mark it as dead */
-		index_concurrent_set_dead(indexId, heapId, heaplocktag);
+		index_concurrent_set_dead(indexId, heapId, &heaplocktag, false);
 
 		/*
 		 * Again, commit the transaction to make the pg_index update visible

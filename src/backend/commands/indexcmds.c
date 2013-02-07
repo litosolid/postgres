@@ -1222,7 +1222,6 @@ ReindexRelationConcurrently(Oid relationOid)
 	/* Mark the old indexes as not ready */
 	foreach(lc, indexIds)
 	{
-		LOCKTAG	   *heapLockTag;
 		Oid			indOid = lfirst_oid(lc);
 		Oid			relOid;
 
@@ -1230,20 +1229,11 @@ ReindexRelationConcurrently(Oid relationOid)
 		relOid = IndexGetRelation(indOid, false);
 
 		/*
-		 * Find the locktag of parent table for this index, we need to wait for
-		 * locks on it.
+		 * Finish the index invalidation and set it as dead. It is not
+		 * necessary to wait for virtual locks on the parent relation as it
+		 * is already sure that this session holds sufficient locks.s
 		 */
-		foreach(lc2, lockTags)
-		{
-			LOCKTAG *localTag = (LOCKTAG *) lfirst(lc2);
-			if (relOid == localTag->locktag_field2)
-				heapLockTag = localTag;
-		}
-
-		Assert(heapLockTag && heapLockTag->locktag_field2 != InvalidOid);
-
-		/* Finish the index invalidation and set it as dead */
-		index_concurrent_set_dead(indOid, relOid, *heapLockTag);
+		index_concurrent_set_dead(indOid, relOid, NULL);
 
 		/* Commit this transaction to make the update visible. */
 		CommitTransactionCommand();
