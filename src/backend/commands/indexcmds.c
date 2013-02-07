@@ -774,15 +774,15 @@ DefineIndex(IndexStmt *stmt,
 
 
 /*
- * ReindexRelationsConcurrently
+ * ReindexRelationConcurrently
  *
- * Process REINDEX CONCURRENTLY for given list of relation Oids. This list of
- * indexes rebuilt is extracted from the list of relation Oids given in output
- * that can be either relations or indexes.
- * Each reindexing step is done simultaneously for all the indexes extracted.
+ * Process REINDEX CONCURRENTLY for given relation Oid. The relation can be
+ * either an index or a table. If a table is specified, each reindexing step
+ * is done in parallel with all the table's indexes as well as its dependent
+ * toast indexes.
  */
 bool
-ReindexRelationsConcurrently(List *relationIds)
+ReindexRelationConcurrently(Oid relationOid)
 {
 	List	   *concurrentIndexIds = NIL,
 			   *indexIds = NIL,
@@ -802,29 +802,56 @@ ReindexRelationsConcurrently(List *relationIds)
 	 * is committed to protect against schema changes that might occur until
 	 * the session lock is taken on each relation.
 	 */
-	foreach(lc, relationIds)
+	switch (get_rel_relkind(relationOid))
 	{
-		Oid			relationOid = lfirst_oid(lc);
-
-		switch (get_rel_relkind(relationOid))
-		{
-			case RELKIND_RELATION:
-				{
-					/*
-					 * In the case of a relation, find all its indexes
-					 * including toast indexes.
-					 */
-					Relation	heapRelation = heap_open(relationOid,
+		case RELKIND_RELATION:
+			{
+				/*
+				 * In the case of a relation, find all its indexes
+				 * including toast indexes.
+				 */
+				Relation	heapRelation = heap_open(relationOid,
 													ShareUpdateExclusiveLock);
 
-					/* Relation on which is based index cannot be shared */
-					if (heapRelation->rd_rel->relisshared)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("concurrent reindex is not supported for shared relations")));
+				/* Track this relation for session locks */
+				parentRelationIds = lappend_oid(parentRelationIds, relationOid);
 
-					/* Add all the valid indexes of relation to list */
-					foreach(lc2, RelationGetIndexList(heapRelation))
+				/* Relation on which is based index cannot be shared */
+				if (heapRelation->rd_rel->relisshared)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("concurrent reindex is not supported for shared relations")));
+
+				/* Add all the valid indexes of relation to list */
+				foreach(lc2, RelationGetIndexList(heapRelation))
+				{
+					Oid			cellOid = lfirst_oid(lc2);
+					Relation	indexRelation = index_open(cellOid,
+													ShareUpdateExclusiveLock);
+
+					if (!indexRelation->rd_index->indisvalid)
+						ereport(WARNING,
+								(errcode(ERRCODE_INDEX_CORRUPTED),
+								 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
+										get_namespace_name(get_rel_namespace(cellOid)),
+										get_rel_name(cellOid))));
+					else
+						indexIds = lappend_oid(indexIds, cellOid);
+
+					index_close(indexRelation, NoLock);
+				}
+
+				/* Also add the toast indexes */
+				if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
+				{
+					Oid			toastOid = heapRelation->rd_rel->reltoastrelid;
+					Relation	toastRelation = heap_open(toastOid,
+												ShareUpdateExclusiveLock);
+
+					/* Track this relation for session locks */
+					parentRelationIds = lappend_oid(parentRelationIds, toastOid);
+
+					foreach(lc2, RelationGetIndexList(toastRelation))
 					{
 						Oid			cellOid = lfirst_oid(lc2);
 						Relation	indexRelation = index_open(cellOid,
@@ -837,84 +864,50 @@ ReindexRelationsConcurrently(List *relationIds)
 											get_namespace_name(get_rel_namespace(cellOid)),
 											get_rel_name(cellOid))));
 						else
-							indexIds = list_append_unique_oid(indexIds,
-															  cellOid);
+							indexIds = lappend_oid(indexIds, cellOid);
 
 						index_close(indexRelation, NoLock);
 					}
 
-					/* Also add the toast indexes */
-					if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
-					{
-						Oid			toastOid = heapRelation->rd_rel->reltoastrelid;
-						Relation	toastRelation = heap_open(toastOid,
-													ShareUpdateExclusiveLock);
-
-						foreach(lc2, RelationGetIndexList(toastRelation))
-						{
-							Oid			cellOid = lfirst_oid(lc2);
-							Relation	indexRelation = index_open(cellOid,
-														ShareUpdateExclusiveLock);
-
-							if (!indexRelation->rd_index->indisvalid)
-								ereport(WARNING,
-										(errcode(ERRCODE_INDEX_CORRUPTED),
-										 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
-												get_namespace_name(get_rel_namespace(cellOid)),
-												get_rel_name(cellOid))));
-							else
-								indexIds = list_append_unique_oid(indexIds, cellOid);
-
-							index_close(indexRelation, NoLock);
-						}
-
-						heap_close(toastRelation, NoLock);
-					}
-
-					heap_close(heapRelation, NoLock);
-					break;
+					heap_close(toastRelation, NoLock);
 				}
-			case RELKIND_INDEX:
-				{
-					/*
-					 * For an index simply add its Oid to list. Invalid indexes
-					 * cannot be included in list.
-					 */
-					Relation	indexRelation = index_open(relationOid, ShareUpdateExclusiveLock);
 
-					if (!indexRelation->rd_index->indisvalid)
-						ereport(WARNING,
-								(errcode(ERRCODE_INDEX_CORRUPTED),
-								 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
-										get_namespace_name(get_rel_namespace(relationOid)),
-										get_rel_name(relationOid))));
-					else
-						indexIds = list_append_unique_oid(indexIds, relationOid);
-
-					index_close(indexRelation, NoLock);
-					break;
-				}
-			default:
-				/* nothing to do */
+				heap_close(heapRelation, NoLock);
 				break;
-		}
+			}
+		case RELKIND_INDEX:
+			{
+				/*
+				 * For an index simply add its Oid to list. Invalid indexes
+				 * cannot be included in list.
+				 */
+				Relation	indexRelation = index_open(relationOid, ShareUpdateExclusiveLock);
+
+				/* Track the parent relation of this index for session locks */
+				parentRelationIds = list_make1_oid(IndexGetRelation(relationOid, false));
+
+				if (!indexRelation->rd_index->indisvalid)
+					ereport(WARNING,
+							(errcode(ERRCODE_INDEX_CORRUPTED),
+							 errmsg("cannot reindex concurrently invalid index \"%s.%s\", skipping",
+									get_namespace_name(get_rel_namespace(relationOid)),
+									get_rel_name(relationOid))));
+				else
+					indexIds = list_make1_oid(relationOid);
+
+				index_close(indexRelation, NoLock);
+				break;
+			}
+		default:
+			/* nothing to do */
+			break;
 	}
 
 	/* Definetely no indexes, so leave */
 	if (indexIds == NIL)
 		return false;
 
-	/*
-	 * Build a unique list of parent relation Oids based on the extracted index
-	 * list. This list of Oids is used to take session locks on the parent
-	 * relations of indexes to prevent concurrent drop of relations involved by
-	 * the concurrent reindex.
-	 */
-	foreach(lc, indexIds)
-	{
-		Oid parentOid = IndexGetRelation(lfirst_oid(lc), false);
-		parentRelationIds = list_append_unique_oid(parentRelationIds, parentOid);
-	}
+	Assert(parentRelationIds != NIL);
 
 	/*
 	 * Phase 1 of REINDEX CONCURRENTLY
@@ -2134,7 +2127,7 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	if (!concurrent)
 		reindex_index(indOid, false);
 	else
-		ReindexRelationsConcurrently(list_make1_oid(indOid));
+		ReindexRelationConcurrently(indOid);
 
 	return indOid;
 }
@@ -2215,7 +2208,7 @@ ReindexTable(RangeVar *relation, bool concurrent)
 		RangeVarCallbackOwnsTable, NULL);
 
 	/* Run through the concurrent process if necessary */
-	if (concurrent && !ReindexRelationsConcurrently(list_make1_oid(heapOid)))
+	if (concurrent && !ReindexRelationConcurrently(heapOid))
 	{
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
@@ -2368,7 +2361,7 @@ ReindexDatabase(const char *databaseName,
 		if (process_concurrent)
 		{
 			old = MemoryContextSwitchTo(private_context);
-			result = ReindexRelationsConcurrently(list_make1_oid(relid));
+			result = ReindexRelationConcurrently(relid);
 			MemoryContextSwitchTo(old);
 		}
 		else
