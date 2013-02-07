@@ -233,10 +233,7 @@ struct XLogRecord;
 /*
  * Method table for resource managers.
  *
- * This struct must be kept in sync with the PG_RMGR definition in
- * rmgr.c.
- *
- * RmgrTable[] is indexed by RmgrId values (see rmgrlist.h).
+ * RmgrTable[] is indexed by RmgrId values (see rmgr.h).
  */
 typedef struct RmgrData
 {
