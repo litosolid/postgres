@@ -200,8 +200,6 @@ const char *subdirs[] = {
 static char bin_path[MAXPGPATH];
 static char backend_exec[MAXPGPATH];
 
-static void *pg_malloc(size_t size);
-static char *pg_strdup(const char *s);
 static char **replace_token(char **lines,
 			  const char *token, const char *replacement);
 
@@ -316,43 +314,6 @@ do { \
 #define QUOTE_PATH	"\""
 #define DIR_SEP "\\"
 #endif
-
-/*
- * routines to check mem allocations and fail noisily.
- *
- * Note that we can't call exit_nicely() on a memory failure, as it calls
- * rmtree() which needs memory allocation. So we just exit with a bang.
- */
-static void *
-pg_malloc(size_t size)
-{
-	void	   *result;
-
-	/* Avoid unportable behavior of malloc(0) */
-	if (size == 0)
-		size = 1;
-	result = malloc(size);
-	if (!result)
-	{
-		fprintf(stderr, _("%s: out of memory\n"), progname);
-		exit(1);
-	}
-	return result;
-}
-
-static char *
-pg_strdup(const char *s)
-{
-	char	   *result;
-
-	result = strdup(s);
-	if (!result)
-	{
-		fprintf(stderr, _("%s: out of memory\n"), progname);
-		exit(1);
-	}
-	return result;
-}
 
 static char *
 escape_quotes(const char *src)
@@ -935,14 +896,22 @@ find_matching_ts_config(const char *lc_type)
 
 	/*
 	 * Convert lc_ctype to a language name by stripping everything after an
-	 * underscore.	Just for paranoia, we also stop at '.' or '@'.
+	 * underscore (usual case) or a hyphen (Windows "locale name"; see
+	 * comments at IsoLocaleName()).
+	 *
+	 * XXX Should ' ' be a stop character?  This would select "norwegian" for
+	 * the Windows locale "Norwegian (Nynorsk)_Norway.1252".  If we do so, we
+	 * should also accept the "nn" and "nb" Unix locales.
+	 *
+	 * Just for paranoia, we also stop at '.' or '@'.
 	 */
 	if (lc_type == NULL)
 		langname = pg_strdup("");
 	else
 	{
 		ptr = langname = pg_strdup(lc_type);
-		while (*ptr && *ptr != '_' && *ptr != '.' && *ptr != '@')
+		while (*ptr &&
+			   *ptr != '_' && *ptr != '-' && *ptr != '.' && *ptr != '@')
 			ptr++;
 		*ptr = '\0';
 	}
