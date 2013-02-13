@@ -1500,9 +1500,13 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 			Relation	toastrel;
 			Oid			toastidx;
 			char		NewToastName[NAMEDATALEN];
+			ListCell   *lc;
+			int			count = 0;
 
 			toastrel = relation_open(newrel->rd_rel->reltoastrelid,
 									 AccessShareLock);
+			if (toastrel->rd_indexvalid == 0)
+				RelationGetIndexList(toastrel);
 			toastidx = toastrel->rd_rel->reltoastidxid;
 			relation_close(toastrel, AccessShareLock);
 
@@ -1512,11 +1516,23 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 			RenameRelationInternal(newrel->rd_rel->reltoastrelid,
 								   NewToastName);
 
-			/* ... and its index too */
-			snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u_index",
-					 OIDOldHeap);
-			RenameRelationInternal(toastidx,
-								   NewToastName);
+			/* ... and its indexes too */
+			foreach(lc, toastrel->rd_indexlist)
+			{
+				/*
+				 * The first index keeps the former toast name and the
+				 * following entries are thought as being concurrent indexes.
+				 */
+				if (count == 0)
+					snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u_index",
+							 OIDOldHeap);
+				else
+					snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u_index_cct%d",
+							 OIDOldHeap, count);
+				RenameRelationInternal(lfirst_oid(lc),
+									   NewToastName);
+				count++;
+			}
 		}
 		relation_close(newrel, NoLock);
 	}
