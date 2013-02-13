@@ -1360,20 +1360,49 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 
 	/*
 	 * If we're swapping two toast tables by content, do the same for all of
-	 * their indexes.
+	 * their indexes. The swap can actually be safely done only if all the indexes
+	 * have valid Oids.
 	 */
 	if (swap_toast_by_content)
 	{
+		Relation toastRel1, toastRel2;
 
-		if relform1->reltoastidxid && relform2->reltoastidxid)
-		//TODO for all the indexes
-		swap_relation_files(relform1->reltoastidxid,
-							relform2->reltoastidxid,
-							target_is_pg_class,
-							swap_toast_by_content,
-							InvalidTransactionId,
-							InvalidMultiXactId,
-							mapped_tables);
+		/* Open relations */
+		toastRel1 = heap_open(relform1->reltoastrelid, RowExclusiveLock);
+		toastRel2 = heap_open(relform2->reltoastrelid, RowExclusiveLock);
+
+		/* Obtain index list if necessary */
+		if (toastRel1->rd_indexvalid == 0)
+			RelationGetIndexList(toastRel1);
+		if (toastRel2->rd_indexvalid == 0)
+			RelationGetIndexList(toastRel2);
+
+		/* Check if the swap is possible for all the toast indexes */
+		if (!list_member_oid(toastRel1->rd_indexlist, InvalidOid) &&
+			!list_member_oid(toastRel2->rd_indexlist, InvalidOid) &&
+			list_length(toastRel1->rd_indexlist) == list_length(toastRel2->rd_indexlist))
+		{
+			ListCell *lc1, *lc2;
+
+			/* Now swap each couple */
+			lc2 = list_head(toastRel2->rd_indexlist);
+			foreach(lc1, toastRel1->rd_indexlist)
+			{
+				Oid indexOid1 = lfirst_oid(lc1);
+				Oid indexOid2 = lfirst_oid(lc2);
+				swap_relation_files(indexOid1,
+									indexOid2,
+									target_is_pg_class,
+									swap_toast_by_content,
+									InvalidTransactionId,
+									InvalidMultiXactId,
+									mapped_tables);
+				lc2 = lnext(lc2);
+			}
+		}
+
+		heap_close(toastRel1, RowExclusiveLock);
+		heap_close(toastRel2, RowExclusiveLock);
 	}
 
 	/* Clean up. */
