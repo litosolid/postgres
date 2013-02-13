@@ -350,7 +350,10 @@ calculate_toast_table_size(Oid toastrelid)
 										toastRel->rd_backend, forkNum);
 
 	/* toast index size, including FSM and VM size */
-	toastIdxRel = relation_open(toastRel->rd_rel->reltoastidxid, AccessShareLock);
+	RelationGetIndexList(toastIdxRel);
+	/* Size is evaluated based on the first index available */
+	toastIdxRel = relation_open(linitial_oid(toastRel->rd_indexlist),
+								AccessShareLock);
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 		size += calculate_relation_size(&(toastIdxRel->rd_node),
 										toastIdxRel->rd_backend, forkNum);

@@ -2503,10 +2503,9 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 	PQExpBuffer upgrade_query = createPQExpBuffer();
 	PGresult   *upgrade_res;
 	Oid			pg_class_reltoastrelid;
-	Oid			pg_class_reltoastidxid;
 
 	appendPQExpBuffer(upgrade_query,
-					  "SELECT c.reltoastrelid, t.reltoastidxid "
+					  "SELECT c.reltoastrelid "
 					  "FROM pg_catalog.pg_class c LEFT JOIN "
 					  "pg_catalog.pg_class t ON (c.reltoastrelid = t.oid) "
 					  "WHERE c.oid = '%u'::pg_catalog.oid;",
@@ -2515,7 +2514,6 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 	upgrade_res = ExecuteSqlQueryForSingleRow(fout, upgrade_query->data);
 
 	pg_class_reltoastrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "reltoastrelid")));
-	pg_class_reltoastidxid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "reltoastidxid")));
 
 	appendPQExpBuffer(upgrade_buffer,
 				   "\n-- For binary upgrade, must preserve pg_class oids\n");
@@ -2540,11 +2538,6 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT binary_upgrade.set_next_toast_pg_class_oid('%u'::pg_catalog.oid);\n",
 							  pg_class_reltoastrelid);
-
-			/* every toast table has an index */
-			appendPQExpBuffer(upgrade_buffer,
-							  "SELECT binary_upgrade.set_next_index_pg_class_oid('%u'::pg_catalog.oid);\n",
-							  pg_class_reltoastidxid);
 		}
 	}
 	else

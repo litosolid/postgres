@@ -1151,8 +1151,6 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 			swaptemp = relform1->reltoastrelid;
 			relform1->reltoastrelid = relform2->reltoastrelid;
 			relform2->reltoastrelid = swaptemp;
-
-			/* we should NOT swap reltoastidxid */
 		}
 	}
 	else
@@ -1361,11 +1359,14 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	}
 
 	/*
-	 * If we're swapping two toast tables by content, do the same for their
-	 * indexes.
+	 * If we're swapping two toast tables by content, do the same for all of
+	 * their indexes.
 	 */
-	if (swap_toast_by_content &&
-		relform1->reltoastidxid && relform2->reltoastidxid)
+	if (swap_toast_by_content)
+	{
+
+		if relform1->reltoastidxid && relform2->reltoastidxid)
+		//TODO for all the indexes
 		swap_relation_files(relform1->reltoastidxid,
 							relform2->reltoastidxid,
 							target_is_pg_class,
@@ -1373,6 +1374,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 							InvalidTransactionId,
 							InvalidMultiXactId,
 							mapped_tables);
+	}
 
 	/* Clean up. */
 	heap_freetuple(reltup1);
