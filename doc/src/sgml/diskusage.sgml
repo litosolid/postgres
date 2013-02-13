@@ -44,7 +44,7 @@
 <programlisting>
 SELECT pg_relation_filepath(oid), relpages FROM pg_class WHERE relname = 'customer';
 
- pg_relation_filepath | relpages 
+ pg_relation_filepath | relpages
 ----------------------+----------
  base/16384/16806     |       60
 (1 row)
@@ -65,12 +65,12 @@ FROM pg_class,
       FROM pg_class
       WHERE relname = 'customer') AS ss
 WHERE oid = ss.reltoastrelid OR
-      oid = (SELECT reltoastidxid
-             FROM pg_class
-             WHERE oid = ss.reltoastrelid)
+      oid = (SELECT indexrelid
+             FROM pg_index
+             WHERE indrelid = ss.reltoastrelid)
 ORDER BY relname;
 
-       relname        | relpages 
+       relname        | relpages
 ----------------------+----------
  pg_toast_16806       |        0
  pg_toast_16806_index |        1
@@ -87,7 +87,7 @@ WHERE c.relname = 'customer' AND
       c2.oid = i.indexrelid
 ORDER BY c2.relname;
 
-       relname        | relpages 
+       relname        | relpages
 ----------------------+----------
  customer_id_indexdex |       26
 </programlisting>
@@ -101,7 +101,7 @@ SELECT relname, relpages
 FROM pg_class
 ORDER BY relpages DESC;
 
-       relname        | relpages 
+       relname        | relpages
 ----------------------+----------
  bigtable             |     3290
  customer             |     3144
