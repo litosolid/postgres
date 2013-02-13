@@ -1027,14 +1027,9 @@ ReindexRelationConcurrently(Oid relationOid)
 	 * of index open.
 	 */
 
-	/* Perform a wait on each session lock separate transaction */
+	/* Perform a wait on all the session locks */
 	StartTransactionCommand();
-	foreach(lc, lockTags)
-	{
-		LOCKTAG	*localTag = (LOCKTAG *) lfirst(lc);
-		Assert(localTag && localTag->locktag_field2 != InvalidOid);
-		WaitForVirtualLocks(*localTag, ShareLock);
-	}
+	WaitForMultipleVirtualLocks(lockTags, ShareLock);
 	CommitTransactionCommand();
 
 	/* Get the first element of concurrent index list */

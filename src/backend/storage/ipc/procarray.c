@@ -2530,12 +2530,13 @@ XidCacheRemoveRunningXids(TransactionId xid,
 
 
 /*
- * WaitForVirtualLocks
+ * WaitForMultipleVirtualLocks
  *
- * Wait until no transaction hold the relation related to lock this lock.
- * To do this, inquire which xacts currently would conflict with this lock on
- * the table referred by the LOCKTAG -- ie, which ones have a lock that permits
- * writing the relation. Then wait for each of these xacts to commit or abort.
+ * Wait until no transactions hold the relation related to lock those locks.
+ * To do this, inquire which xacts currently would conflict with each lock on
+ * the table referred by the respective LOCKTAG -- ie, which ones have a lock
+ * that permits writing the relation. Then wait for each of these xacts to
+ * commit or abort.
  *
  * To do this, inquire which xacts currently would conflict with lockmode
  * on the relation.
@@ -2545,17 +2546,51 @@ XidCacheRemoveRunningXids(TransactionId xid,
  * since they certainly aren't going to do anything more.
  */
 void
+WaitForMultipleVirtualLocks(List *locktags, LOCKMODE lockmode)
+{
+	VirtualTransactionId **old_lockholders;
+	int i, count = 0;
+	ListCell *lc;
+
+	/* Leave if no locks to wait for */
+	if (list_length(locktags) == 0)
+		return;
+
+	old_lockholders = (VirtualTransactionId **)
+		palloc(list_length(locktags) * sizeof(VirtualTransactionId *));
+
+	/* Collect the transactions we need to wait on for each relation lock */
+	foreach(lc, locktags)
+	{
+		LOCKTAG *locktag = lfirst(lc);
+		old_lockholders[count++] = GetLockConflicts(locktag, lockmode);
+	}
+
+	/* Finally wait for each transaction to complete */
+	for (i = 0; i < count; i++)
+	{
+		VirtualTransactionId *lockholders = old_lockholders[i];
+
+		while (VirtualTransactionIdIsValid(*lockholders))
+		{
+			VirtualXactLock(*lockholders, true);
+			lockholders++;
+		}
+	}
+
+	pfree(old_lockholders);
+}
+
+
+/*
+ * WaitForVirtualLocks
+ *
+ * Similar to WaitForMultipleVirtualLocks, but for a single lock.
+ */
+void
 WaitForVirtualLocks(LOCKTAG heaplocktag, LOCKMODE lockmode)
 {
-	VirtualTransactionId *old_lockholders;
-
-	old_lockholders = GetLockConflicts(&heaplocktag, lockmode);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForMultipleVirtualLocks(list_make1(&heaplocktag), lockmode);
 }
 
 
