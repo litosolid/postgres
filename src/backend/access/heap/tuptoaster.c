@@ -1236,7 +1236,7 @@ toast_save_datum(Relation rel, Datum value,
 				 struct varlena * oldexternal, int options)
 {
 	Relation	toastrel;
-	Relation	toastidx;
+	Relation   *toastidx;
 	HeapTuple	toasttup;
 	TupleDesc	toasttupDesc;
 	Datum		t_values[3];
@@ -1255,6 +1255,9 @@ toast_save_datum(Relation rel, Datum value,
 	char	   *data_p;
 	int32		data_todo;
 	Pointer		dval = DatumGetPointer(value);
+	int			count = 0;
+	int			num_indexes;
+	ListCell   *lc;
 
 	/*
 	 * Open the toast relation and its index.  We can use the index to check
@@ -1263,7 +1266,38 @@ toast_save_datum(Relation rel, Datum value,
 	 */
 	toastrel = heap_open(rel->rd_rel->reltoastrelid, RowExclusiveLock);
 	toasttupDesc = toastrel->rd_att;
-	toastidx = index_open(toastrel->rd_rel->reltoastidxid, RowExclusiveLock);
+
+	/* Fetch the list of indexes for toast relation if necessary */
+	if (toastrel->rd_indexvalid == 0)
+		RelationGetIndexList(toastrel);
+	num_indexes = list_length(toastrel->rd_indexlist);
+
+	/* Allocate enough space for all the relations */
+	toastidx = (Relation *)
+		palloc(num_indexes * sizeof(Relation));
+
+	/*
+	 * Now open an relation for each possible index. A toast relation can have
+	 * multiple concurrent indexes created by REINDEX CONCURRENTLY that might
+	 * have been created in parallel.
+	 */
+	if (num_indexes == 1)
+	{
+		/*
+		 * This is the case of a single index present, so use the one referenced
+		 * directly in toast relation.
+		 */
+		toastidx[0] = index_open(toastrel->rd_rel->reltoastidxid, RowExclusiveLock);
+	}
+	else
+	{
+		/*
+		 * There are concurrent indexes existing with the toast index, so open
+		 * relations on all of them to insert new toast value everywhere.
+		 */
+		foreach(lc, toastrel->rd_indexlist)
+			toastidx[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
+	}
 
 	/*
 	 * Get the data pointer and length, and compute va_rawsize and va_extsize.
@@ -1328,7 +1362,7 @@ toast_save_datum(Relation rel, Datum value,
 		/* normal case: just choose an unused OID */
 		toast_pointer.va_valueid =
 			GetNewOidWithIndex(toastrel,
-							   RelationGetRelid(toastidx),
+							   RelationGetRelid(toastrel),
 							   (AttrNumber) 1);
 	}
 	else
@@ -1376,13 +1410,14 @@ toast_save_datum(Relation rel, Datum value,
 		{
 			/*
 			 * new value; must choose an OID that doesn't conflict in either
-			 * old or new toast table
+			 * old or new toast table. An Oid value based on the first toast
+			 * index in list is used.
 			 */
 			do
 			{
 				toast_pointer.va_valueid =
 					GetNewOidWithIndex(toastrel,
-									   RelationGetRelid(toastidx),
+									   RelationGetRelid(toastidx[0]),
 									   (AttrNumber) 1);
 			} while (toastid_valueid_exists(rel->rd_toastoid,
 											toast_pointer.va_valueid));
@@ -1425,12 +1460,14 @@ toast_save_datum(Relation rel, Datum value,
 		 *
 		 * Note also that there had better not be any user-created index on
 		 * the TOAST table, since we don't bother to update anything else.
+		 * Insertion is done on all the indexes of the toast relation.
 		 */
-		index_insert(toastidx, t_values, t_isnull,
-					 &(toasttup->t_self),
-					 toastrel,
-					 toastidx->rd_index->indisunique ?
-					 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO);
+		for (count = 0; count < num_indexes; count++)
+			index_insert(toastidx[count], t_values, t_isnull,
+						 &(toasttup->t_self),
+						 toastrel,
+						 toastidx[count]->rd_index->indisunique ?
+						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO);
 
 		/*
 		 * Free memory
@@ -1447,8 +1484,10 @@ toast_save_datum(Relation rel, Datum value,
 	/*
 	 * Done - close toast relation
 	 */
-	index_close(toastidx, RowExclusiveLock);
+	for (count = 0; count < num_indexes; count++)
+		index_close(toastidx[count], RowExclusiveLock);
 	heap_close(toastrel, RowExclusiveLock);
+	pfree(toastidx);
 
 	/*
 	 * Create the TOAST pointer value that we'll return
