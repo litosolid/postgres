@@ -1362,7 +1362,7 @@ toast_save_datum(Relation rel, Datum value,
 		/* normal case: just choose an unused OID */
 		toast_pointer.va_valueid =
 			GetNewOidWithIndex(toastrel,
-							   RelationGetRelid(toastrel),
+							   RelationGetRelid(toastidx[0]),
 							   (AttrNumber) 1);
 	}
 	else
