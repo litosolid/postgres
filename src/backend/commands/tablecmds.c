@@ -8698,7 +8698,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 
 	reltoastrelid = rel->rd_rel->reltoastrelid;
 	RelationGetIndexList(rel);
-	reltoastidxids = rel->rd_indexlist;
+	reltoastidxids = list_copy(rel->rd_indexlist);
 
 	/* Get a modifiable copy of the relation's pg_class row */
 	pg_class = heap_open(RelationRelationId, RowExclusiveLock);
@@ -8783,6 +8783,9 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 		if (OidIsValid(idxid))
 			ATExecSetTableSpace(idxid, newTableSpace, lockmode);
 	}
+
+	/* Clean up */
+	list_free(reltoastidxids);
 }
 
 /*
