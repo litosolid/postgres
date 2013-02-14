@@ -313,9 +313,13 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 							  "		ON i.reloid = c.oid"));
 	PQclear(executeQueryOrDie(conn,
 							  "INSERT INTO info_rels "
-							  "SELECT reltoastidxid "
-							  "FROM info_rels i JOIN pg_catalog.pg_class c "
-							  "		ON i.reloid = c.oid"));
+							  "SELECT indexrelid "
+							  "FROM info_rels i "
+							  "  JOIN pg_catalog.pg_class c "
+							  "    ON i.reloid = c.oid "
+							  "  JOIN pg_catalog.pg_index p "
+							  "    ON i.reloid = p.indrelid "
+							  "WHERE p.indexrelid >= %u ", FirstNormalObjectId));
 
 	snprintf(query, sizeof(query),
 			 "SELECT c.oid, n.nspname, c.relname, "
