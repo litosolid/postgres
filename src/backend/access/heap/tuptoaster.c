@@ -1672,7 +1672,7 @@ toast_fetch_datum(struct varlena * attr)
 	toastidxs = (Relation *) palloc(num_indexes * sizeof(Relation));
 
 	foreach(lc, toastrel->rd_indexlist)
-		toastidxs[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
+		toastidxs[count++] = index_open(lfirst_oid(lc), AccessShareLock);
 
 	/*
 	 * Setup a scan key to fetch from the index by va_valueid
@@ -1878,7 +1878,7 @@ toast_fetch_datum_slice(struct varlena * attr, int32 sliceoffset, int32 length)
 	toastidxs = (Relation *) palloc(num_indexes * sizeof(Relation));
 
 	foreach(lc, toastrel->rd_indexlist)
-		toastidxs[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
+		toastidxs[count++] = index_open(lfirst_oid(lc), AccessShareLock);
 
 	/*
 	 * Setup a scan key to fetch from the index. This is either two keys or
