@@ -43,6 +43,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "commands/defrem.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -672,6 +673,10 @@ UpdateIndexRelation(Oid indexoid,
  *		will be marked "invalid" and the caller must take additional steps
  *		to fix it up.
  * is_internal: if true, post creation hook for new index
+ * is_reindex: if true, create an index that is used as a duplicate of an
+ *		existing index created during a concurrent operation. This index can
+ *		also be a toast relation. Sufficient locks are normally taken on
+ *		the related relations once this is called during a concurrent operation.
  *
  * Returns the OID of the created index.
  */
@@ -695,7 +700,8 @@ index_create(Relation heapRelation,
 			 bool allow_system_table_mods,
 			 bool skip_build,
 			 bool concurrent,
-			 bool is_internal)
+			 bool is_internal,
+			 bool is_reindex)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
 	Relation	pg_class;
@@ -738,19 +744,23 @@ index_create(Relation heapRelation,
 
 	/*
 	 * concurrent index build on a system catalog is unsafe because we tend to
-	 * release locks before committing in catalogs
+	 * release locks before committing in catalogs. If the index is created during
+	 * a REINDEX CONCURRENTLY operation, sufficient locks are already taken.
 	 */
 	if (concurrent &&
-		IsSystemRelation(heapRelation))
+		IsSystemRelation(heapRelation) &&
+		!is_reindex)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("concurrent index creation on system catalog tables is not supported")));
 
 	/*
 	 * This case is currently not supported, but there's no way to ask for it
-	 * in the grammar anyway, so it can't happen.
+	 * in the grammar anyway, so it can't happen. This might be called during a
+	 * conccurrent reindex operation, in this case sufficient locks are already
+	 * taken on the related relations.
 	 */
-	if (concurrent && is_exclusion)
+	if (concurrent && is_exclusion && !is_reindex)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg_internal("concurrent index creation for exclusion constraints is not supported")));
@@ -1083,7 +1093,7 @@ index_create(Relation heapRelation,
 	}
 	else
 	{
-		index_build(heapRelation, indexRelation, indexInfo, isprimary, false);
+		index_build(heapRelation, indexRelation, indexInfo, isprimary, false, true);
 	}
 
 	/*
@@ -1094,6 +1104,366 @@ index_create(Relation heapRelation,
 
 	return indexRelationId;
 }
+
+
+/*
+ * index_concurrent_create
+ *
+ * Create an index based on the given one that will be used for concurrent
+ * operations. The index is inserted into catalogs and needs to be built later
+ * on. This is called during concurrent index processing. The heap relation
+ * on which is based the index needs to be closed by the caller.
+ */
+Oid
+index_concurrent_create(Relation heapRelation, Oid indOid, char *concurrentName)
+{
+	Relation	indexRelation;
+	IndexInfo  *indexInfo;
+	Oid			concurrentOid = InvalidOid;
+	List	   *columnNames = NIL;
+	int			i;
+	HeapTuple	indexTuple;
+	Datum		indclassDatum, indoptionDatum;
+	oidvector  *indclass;
+	int2vector *indcoloptions;
+	bool		isnull;
+	bool		isconstraint;
+	bool		initdeferred = false;
+	Oid			constraintOid = get_index_constraint(indOid);
+
+	indexRelation = index_open(indOid, RowExclusiveLock);
+
+	/* Concurrent index uses the same index information as former index */
+	indexInfo = BuildIndexInfo(indexRelation);
+
+	/*
+	 * Determine if index is initdeferred, this depends on its dependent
+	 * constraint.
+	 */
+	if (OidIsValid(constraintOid))
+	{
+		/* Look for the correct value */
+		HeapTuple			constTuple;
+		Form_pg_constraint	constraint;
+
+		constTuple = SearchSysCache1(CONSTROID,
+									 ObjectIdGetDatum(constraintOid));
+		if (!HeapTupleIsValid(constTuple))
+			elog(ERROR, "cache lookup failed for constraint %u",
+				 constraintOid);
+		constraint = (Form_pg_constraint) GETSTRUCT(constTuple);
+		initdeferred = constraint->condeferred;
+
+		ReleaseSysCache(constTuple);
+	}
+
+	/* Build the list of column names, necessary for index_create */
+	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+	{
+		AttrNumber	attnum = indexInfo->ii_KeyAttrNumbers[i];
+		Form_pg_attribute attform = heapRelation->rd_att->attrs[attnum - 1];;
+
+		/* Pick up column name from the relation */
+		columnNames = lappend(columnNames, pstrdup(NameStr(attform->attname)));
+	}
+
+	/*
+	 * Index is considered as a constraint if it is UNIQUE, PRIMARY  KEY or
+	 * EXCLUSION.
+	 */
+	isconstraint = indexRelation->rd_index->indisunique ||
+		indexRelation->rd_index->indisprimary ||
+		indexRelation->rd_index->indisexclusion;
+
+	/* Get the array of class and column options IDs from index info */
+	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indOid);
+	indclassDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+									Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+	indoptionDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+									 Anum_pg_index_indoption, &isnull);
+	Assert(!isnull);
+	indcoloptions = (int2vector *) DatumGetPointer(indoptionDatum);
+
+	/* Now create the concurrent index */
+	concurrentOid = index_create(heapRelation,
+								 (const char*)concurrentName,
+								 InvalidOid,
+								 InvalidOid,
+								 indexInfo,
+								 columnNames,
+								 indexRelation->rd_rel->relam,
+								 indexRelation->rd_rel->reltablespace,
+								 indexRelation->rd_indcollation,
+								 indclass->values,
+								 indcoloptions->values,
+								 (Datum) indexRelation->rd_options,
+								 indexRelation->rd_index->indisprimary,
+								 isconstraint,	/* is constraint? */
+								 !indexRelation->rd_index->indimmediate,	/* is deferrable? */
+								 initdeferred,	/* is initially deferred? */
+								 true,	/* allow table to be a system catalog? */
+								 true,	/* skip build? */
+								 true,	/* concurrent? */
+								 false,	/* is_internal */
+								 true); /* reindex? */
+
+	/* Close the relations used and clean up */
+	index_close(indexRelation, RowExclusiveLock);
+	ReleaseSysCache(indexTuple);
+
+	return concurrentOid;
+}
+
+
+/*
+ * index_concurrent_build
+ *
+ * Build index for a concurrent operation. Low-level locks are taken when this
+ * operation is performed to prevent only schema changes.
+ */
+void
+index_concurrent_build(Oid heapOid,
+					   Oid indexOid,
+					   bool isprimary)
+{
+	Relation	rel,
+				indexRelation;
+	IndexInfo  *indexInfo;
+
+	/* Open and lock the parent heap relation */
+	rel = heap_open(heapOid, ShareUpdateExclusiveLock);
+
+	/* And the target index relation */
+	indexRelation = index_open(indexOid, RowExclusiveLock);
+
+	/* We have to re-build the IndexInfo struct, since it was lost in commit */
+	indexInfo = BuildIndexInfo(indexRelation);
+	Assert(!indexInfo->ii_ReadyForInserts);
+	indexInfo->ii_Concurrent = true;
+	indexInfo->ii_BrokenHotChain = false;
+
+	/*
+	 * Now build the index, in the case of a parent relation being a toast
+	 * relation, its reltoastidxid is updated when calling index_concurrent_swap.
+	 */
+	index_build(rel, indexRelation, indexInfo, isprimary, false, false);
+
+	/* Close both the relations, but keep the locks */
+	heap_close(rel, NoLock);
+	index_close(indexRelation, NoLock);
+}
+
+
+/*
+ * index_concurrent_swap
+ *
+ * Replace old index by old index in a concurrent context. For the time being
+ * what is done here is switching the relation names of the indexes. If extra
+ * operations are necessary during a concurrent swap, processing should be
+ * added here. AccessExclusiveLock is taken on the index relations that are
+ * swapped until the end of the transaction where this function is called.
+ */
+void
+index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
+{
+	char		   *nameNew, *nameOld, *nameTemp;
+	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
+	Relation		oldIndexRel, newIndexRel, parentRel;
+
+	/*
+	 * Take a lock on the old and new index before switching their names. This
+	 * avoids having index swapping relying on relation renaming mechanism to
+	 * get a lock on the relations involved.
+	 */
+	oldIndexRel = relation_open(oldIndexOid, AccessExclusiveLock);
+	newIndexRel = relation_open(newIndexOid, AccessExclusiveLock);
+
+	/* Allocate all the names used for this operation */
+	nameNew = get_rel_name(newIndexOid);
+	nameOld = get_rel_name(oldIndexOid);
+	/* Build a unique temporary name */
+	nameTemp = ChooseRelationName((const char *) get_rel_name(oldIndexOid),
+								  NULL,
+								  "tmp",
+								  get_rel_namespace(oldIndexOid));
+
+	/* Change the name of old index to something temporary */
+	RenameRelationInternal(oldIndexOid, nameTemp);
+
+	/* Make the catalog update visible */
+	CommandCounterIncrement();
+
+	/* Change the name of the new index with the old one */
+	RenameRelationInternal(newIndexOid, nameOld);
+
+	/* Make the catalog update visible */
+	CommandCounterIncrement();
+
+	/* Finally change the name of old index with name of the new one */
+	RenameRelationInternal(oldIndexOid, nameNew);
+
+	/* Make the catalog update visible */
+	CommandCounterIncrement();
+
+	/* The lock taken previously is not released until the end of transaction */
+	relation_close(oldIndexRel, NoLock);
+	relation_close(newIndexRel, NoLock);
+
+	/*
+	 * Scan for potential foreign keys on the index being swapped and change its
+	 * dependencies to the new index created concurrently.
+	 */
+	switchIndexConstraintOnForeignKey(parentOid, oldIndexOid, newIndexOid);
+}
+
+/*
+ * index_concurrent_set_dead
+ *
+ * Perform the last invalidation stage of DROP INDEX CONCURRENTLY before
+ * actually dropping the index. After calling this function the index is
+ * seen by all the backends as dead.
+ */
+void
+index_concurrent_set_dead(Oid indexId, Oid heapId, LOCKTAG *locktag)
+{
+	Relation	heapRelation;
+	Relation	indexRelation;
+
+	/*
+	 * Now we must wait until no running transaction could be using the
+	 * index for a query if necessary.
+	 *
+	 * Note: the reason we use actual lock acquisition here, rather than
+	 * just checking the ProcArray and sleeping, is that deadlock is
+	 * possible if one of the transactions in question is blocked trying
+	 * to acquire an exclusive lock on our table. The lock code will
+	 * detect deadlock and error out properly.
+	 */
+	if (locktag)
+		WaitForVirtualLocks(*locktag, AccessExclusiveLock);
+
+	/*
+	 * No more predicate locks will be acquired on this index, and we're
+	 * about to stop doing inserts into the index which could show
+	 * conflicts with existing predicate locks, so now is the time to move
+	 * them to the heap relation.
+	 */
+	heapRelation = heap_open(heapId, ShareUpdateExclusiveLock);
+	indexRelation = index_open(indexId, ShareUpdateExclusiveLock);
+	TransferPredicateLocksToHeapRelation(indexRelation);
+
+	/*
+	 * Now we are sure that nobody uses the index for queries; they just
+	 * might have it open for updating it.	So now we can unset indisready
+	 * and indislive, then wait till nobody could be using it at all
+	 * anymore.
+	 */
+	index_set_state_flags(indexId, INDEX_DROP_SET_DEAD);
+
+	/*
+	 * Invalidate the relcache for the table, so that after this commit
+	 * all sessions will refresh the table's index list.  Forgetting just
+	 * the index's relcache entry is not enough.
+	 */
+	CacheInvalidateRelcache(heapRelation);
+
+	/*
+	 * Close the relations again, though still holding session lock.
+	 */
+	heap_close(heapRelation, NoLock);
+	index_close(indexRelation, NoLock);
+}
+
+/*
+ * index_concurrent_clear_valid
+ *
+ * Release the valid state of a given index and then release the cache of
+ * its parent relation. This function should be called when initializing an
+ * index drop in a concurrent context before setting the index as dead.
+ */
+void
+index_concurrent_clear_valid(Relation heapRelation, Oid indexOid)
+{
+	/*
+	 * Mark index invalid by updating its pg_index entry
+	 */
+	index_set_state_flags(indexOid, INDEX_DROP_CLEAR_VALID);
+
+	/*
+	 * Invalidate the relcache for the table, so that after this commit
+	 * all sessions will refresh any cached plans that might reference the
+	 * index.
+	 */
+	CacheInvalidateRelcache(heapRelation);
+}
+
+/*
+ * index_concurrent_drop
+ *
+ * Drop a single index concurrently as the last step of an index concurrent
+ * process Deletion is done through performDeletion or dependencies of the
+ * index are not dropped. At this point all the indexes are already considered
+ * as invalid and dead so they can be dropped without using any concurrent
+ * options.
+ */
+void
+index_concurrent_drop(Oid indexOid)
+{
+	Oid				constraintOid = get_index_constraint(indexOid);
+	ObjectAddress	object;
+	Form_pg_index	indexForm;
+	Relation		pg_index;
+	HeapTuple		indexTuple;
+	bool			indislive;
+
+	/*
+	 * Check that the index dropped here is not alive, it might be used by
+	 * other backends in this case.
+	 */
+	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID,
+									 ObjectIdGetDatum(indexOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indexOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+	indislive = indexForm->indislive;
+
+	/* Clean up */
+	heap_close(pg_index, RowExclusiveLock);
+
+	/* Leave if index is still alive */
+	if (indislive)
+		return;
+
+	/*
+	 * We are sure to have a dead index, so begin the drop process.
+	 * Register constraint or index for drop.
+	 */
+	if (OidIsValid(constraintOid))
+	{
+		object.classId = ConstraintRelationId;
+		object.objectId = constraintOid;
+	}
+	else
+	{
+		object.classId = RelationRelationId;
+		object.objectId = indexOid;
+	}
+
+	object.objectSubId = 0;
+
+	/* Perform deletion for normal and toast indexes */
+	performDeletion(&object,
+					DROP_RESTRICT,
+					0);
+}
+
 
 /*
  * index_constraint_create
@@ -1324,7 +1694,6 @@ index_drop(Oid indexId, bool concurrent)
 				indexrelid;
 	LOCKTAG		heaplocktag;
 	LOCKMODE	lockmode;
-	VirtualTransactionId *old_lockholders;
 
 	/*
 	 * To drop an index safely, we must grab exclusive lock on its parent
@@ -1406,17 +1775,8 @@ index_drop(Oid indexId, bool concurrent)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("DROP INDEX CONCURRENTLY must be first action in transaction")));
 
-		/*
-		 * Mark index invalid by updating its pg_index entry
-		 */
-		index_set_state_flags(indexId, INDEX_DROP_CLEAR_VALID);
-
-		/*
-		 * Invalidate the relcache for the table, so that after this commit
-		 * all sessions will refresh any cached plans that might reference the
-		 * index.
-		 */
-		CacheInvalidateRelcache(userHeapRelation);
+		/* Mark the index as invalid */
+		index_concurrent_clear_valid(userHeapRelation, indexId);
 
 		/* save lockrelid and locktag for below, then close but keep locks */
 		heaprelid = userHeapRelation->rd_lockInfo.lockRelId;
@@ -1444,63 +1804,8 @@ index_drop(Oid indexId, bool concurrent)
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
-		/*
-		 * Now we must wait until no running transaction could be using the
-		 * index for a query.  To do this, inquire which xacts currently would
-		 * conflict with AccessExclusiveLock on the table -- ie, which ones
-		 * have a lock of any kind on the table. Then wait for each of these
-		 * xacts to commit or abort. Note we do not need to worry about xacts
-		 * that open the table for reading after this point; they will see the
-		 * index as invalid when they open the relation.
-		 *
-		 * Note: the reason we use actual lock acquisition here, rather than
-		 * just checking the ProcArray and sleeping, is that deadlock is
-		 * possible if one of the transactions in question is blocked trying
-		 * to acquire an exclusive lock on our table.  The lock code will
-		 * detect deadlock and error out properly.
-		 *
-		 * Note: GetLockConflicts() never reports our own xid, hence we need
-		 * not check for that.	Also, prepared xacts are not reported, which
-		 * is fine since they certainly aren't going to do anything more.
-		 */
-		old_lockholders = GetLockConflicts(&heaplocktag, AccessExclusiveLock);
-
-		while (VirtualTransactionIdIsValid(*old_lockholders))
-		{
-			VirtualXactLock(*old_lockholders, true);
-			old_lockholders++;
-		}
-
-		/*
-		 * No more predicate locks will be acquired on this index, and we're
-		 * about to stop doing inserts into the index which could show
-		 * conflicts with existing predicate locks, so now is the time to move
-		 * them to the heap relation.
-		 */
-		userHeapRelation = heap_open(heapId, ShareUpdateExclusiveLock);
-		userIndexRelation = index_open(indexId, ShareUpdateExclusiveLock);
-		TransferPredicateLocksToHeapRelation(userIndexRelation);
-
-		/*
-		 * Now we are sure that nobody uses the index for queries; they just
-		 * might have it open for updating it.	So now we can unset indisready
-		 * and indislive, then wait till nobody could be using it at all
-		 * anymore.
-		 */
-		index_set_state_flags(indexId, INDEX_DROP_SET_DEAD);
-
-		/*
-		 * Invalidate the relcache for the table, so that after this commit
-		 * all sessions will refresh the table's index list.  Forgetting just
-		 * the index's relcache entry is not enough.
-		 */
-		CacheInvalidateRelcache(userHeapRelation);
-
-		/*
-		 * Close the relations again, though still holding session lock.
-		 */
-		heap_close(userHeapRelation, NoLock);
-		index_close(userIndexRelation, NoLock);
+		/* Finish invalidation of index and mark it as dead */
+		index_concurrent_set_dead(indexId, heapId, &heaplocktag);
 
 		/*
 		 * Again, commit the transaction to make the pg_index update visible
@@ -1513,13 +1818,7 @@ index_drop(Oid indexId, bool concurrent)
 		 * Wait till every transaction that saw the old index state has
 		 * finished.  The logic here is the same as above.
 		 */
-		old_lockholders = GetLockConflicts(&heaplocktag, AccessExclusiveLock);
-
-		while (VirtualTransactionIdIsValid(*old_lockholders))
-		{
-			VirtualXactLock(*old_lockholders, true);
-			old_lockholders++;
-		}
+		WaitForVirtualLocks(heaplocktag, AccessExclusiveLock);
 
 		/*
 		 * Re-open relations to allow us to complete our actions.
@@ -1931,6 +2230,8 @@ index_update_stats(Relation rel,
  *
  * isprimary tells whether to mark the index as a primary-key index.
  * isreindex indicates we are recreating a previously-existing index.
+ * istoastupdate tells whether it is necessary to update the toast index Oid
+ * for parent relation.
  *
  * Note: when reindexing an existing index, isprimary can be false even if
  * the index is a PK; it's already properly marked and need not be re-marked.
@@ -1944,7 +2245,8 @@ index_build(Relation heapRelation,
 			Relation indexRelation,
 			IndexInfo *indexInfo,
 			bool isprimary,
-			bool isreindex)
+			bool isreindex,
+			bool istoastupdate)
 {
 	RegProcedure procedure;
 	IndexBuildResult *stats;
@@ -3174,7 +3476,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 
 		/* Initialize the index and rebuild */
 		/* Note: we do not need to re-establish pkey setting */
-		index_build(heapRelation, iRel, indexInfo, false, true);
+		index_build(heapRelation, iRel, indexInfo, false, true, true);
 	}
 	PG_CATCH();
 	{

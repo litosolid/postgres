@@ -254,4 +254,8 @@ extern bool check_functional_grouping(Oid relid,
 						  List *grouping_columns,
 						  List **constraintDeps);
 
+extern void switchIndexConstraintOnForeignKey(Oid parentOid,
+											  Oid oldIndexOid,
+											  Oid newIndexOid);
+
 #endif   /* PG_CONSTRAINT_H */

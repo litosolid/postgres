@@ -280,7 +280,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid, Datum reloptio
 				 rel->rd_rel->reltablespace,
 				 collationObjectId, classObjectId, coloptions, (Datum) 0,
 				 true, false, false, false,
-				 true, false, false, true);
+				 true, false, false, false, false);
 
 	heap_close(toast_rel, NoLock);
 

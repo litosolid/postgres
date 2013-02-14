@@ -76,4 +76,8 @@ extern void XidCacheRemoveRunningXids(TransactionId xid,
 						  int nxids, const TransactionId *xids,
 						  TransactionId latestXid);
 
+extern void WaitForMultipleVirtualLocks(List *locktags, LOCKMODE lockmode);
+extern void WaitForVirtualLocks(LOCKTAG heaplocktag, LOCKMODE lockmode);
+extern void WaitForOldSnapshots(Snapshot snapshot);
+
 #endif   /* PROCARRAY_H */

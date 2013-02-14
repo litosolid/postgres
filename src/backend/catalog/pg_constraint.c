@@ -973,3 +973,79 @@ check_functional_grouping(Oid relid,
 
 	return result;
 }
+
+/*
+ * switchIndexConstraintOnForeignKey
+ *
+ * Switch foreign keys references for a given index to a new index created
+ * concurrently. This process is used when swapping indexes for a concurrent
+ * process. All the constraints that are not referenced externally like primary
+ * keys or unique indexes should be switched using the structure of index.c for
+ * concurrent index creation and drop.
+ * This function takes care of also switching the dependencies of the foreign
+ * key from the old index to the new index in pg_depend.
+ *
+ * In order to complete this process, the following process is done:
+ * 1) Scan pg_constraint and extract the list of foreign keys that refer to the
+ * parent relation of the index being swapped as conrelid.
+ * 2) Check in this list the foreign keys that use the old index as reference
+ * here with conindid
+ * 3) Update field conindid to the new index Oid on all the foreign keys
+ * 4) Switch dependencies of the foreign key to the new index
+ */
+void
+switchIndexConstraintOnForeignKey(Oid parentOid,
+								  Oid oldIndexOid,
+								  Oid newIndexOid)
+{
+	ScanKeyData skey[1];
+	SysScanDesc conscan;
+	Relation    conRel;
+	HeapTuple   htup;
+
+	/*
+	 * Search pg_constraint for the foreign key constraints associated
+	 * with the index by scanning using conrelid.
+	 */
+	ScanKeyInit(&skey[0],
+				Anum_pg_constraint_confrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(parentOid));
+
+	conRel = heap_open(ConstraintRelationId, AccessShareLock);
+	conscan = systable_beginscan(conRel, ConstraintForeignRelidIndexId,
+								 true, SnapshotNow, 1, skey);
+
+	while (HeapTupleIsValid(htup = systable_getnext(conscan)))
+	{
+		Form_pg_constraint contuple = (Form_pg_constraint) GETSTRUCT(htup);
+
+		/* Check if a foreign constraint uses the index being swapped */
+		if (contuple->contype == CONSTRAINT_FOREIGN &&
+			contuple->confrelid == parentOid &&
+			contuple->conindid == oldIndexOid)
+		{
+			/*
+			 * An index has been found, so first switch  all the dependencies
+			 * of this foreign key from the old index to the new index.
+			 */
+			changeDependencyFor(ConstraintRelationId,
+								HeapTupleGetOid(htup),
+								RelationRelationId,
+								oldIndexOid,
+								newIndexOid);
+
+			/* Then update its pg_constraint entry */
+			htup = heap_copytuple(htup);
+			contuple = (Form_pg_constraint) GETSTRUCT(htup);
+			contuple->conindid = newIndexOid;
+			simple_heap_update(conRel, &htup->t_self, htup);
+
+			/* Update the system catalog indexes */
+			CatalogUpdateIndexes(conRel, htup);
+		}
+	}
+
+	systable_endscan(conscan);
+	heap_close(conRel, AccessShareLock);
+}
