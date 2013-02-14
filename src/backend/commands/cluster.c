@@ -1527,7 +1527,6 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 		if (OidIsValid(newrel->rd_rel->reltoastrelid))
 		{
 			Relation	toastrel;
-			Oid			toastidx;
 			char		NewToastName[NAMEDATALEN];
 			ListCell   *lc;
 			int			count = 0;
@@ -1536,7 +1535,6 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 									 AccessShareLock);
 			if (toastrel->rd_indexvalid == 0)
 				RelationGetIndexList(toastrel);
-			toastidx = toastrel->rd_rel->reltoastidxid;
 			relation_close(toastrel, AccessShareLock);
 
 			/* rename the toast table ... */

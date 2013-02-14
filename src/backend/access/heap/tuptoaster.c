@@ -1257,6 +1257,7 @@ toast_save_datum(Relation rel, Datum value,
 	Pointer		dval = DatumGetPointer(value);
 	ListCell   *lc;
 	int			count = 0;
+	int			num_indexes;
 
 	/*
 	 * Open the toast relation and its index.  We can use the index to check
@@ -1268,11 +1269,11 @@ toast_save_datum(Relation rel, Datum value,
 	toasttupDesc = toastrel->rd_att;
 	if (toastrel->rd_indexvalid == 0)
 		RelationGetIndexList(toastrel);
-	num_indexes = list_length(toastrel->rd_index_list);
+	num_indexes = list_length(toastrel->rd_indexlist);
 
 	toastidxs = (Relation *) palloc(num_indexes * sizeof(Relation));
 
-	foreach(lc, toastrel->rd_index_list)
+	foreach(lc, toastrel->rd_indexlist)
 		toastidxs[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
 
 	/*
@@ -1440,11 +1441,11 @@ toast_save_datum(Relation rel, Datum value,
 		 * Note also that there had better not be any user-created index on
 		 * the TOAST table, since we don't bother to update anything else.
 		 */
-		for (i = 0, i < num_indexes, i++)
-			index_insert(toastidxs[i], t_values, t_isnull,
+		for (count = 0; count < num_indexes; count++)
+			index_insert(toastidxs[count], t_values, t_isnull,
 						 &(toasttup->t_self),
 						 toastrel,
-						 toastidx->rd_index->indisunique ?
+						 toastidxs[count]->rd_index->indisunique ?
 						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO);
 
 		/*
@@ -1462,8 +1463,8 @@ toast_save_datum(Relation rel, Datum value,
 	/*
 	 * Done - close toast relation
 	 */
-	for (i = 0, i < num_indexes, i++)
-		index_close(toastidxs[i], RowExclusiveLock);
+	for (count = 0; count < num_indexes; count++)
+		index_close(toastidxs[count], RowExclusiveLock);
 	heap_close(toastrel, RowExclusiveLock);
 	pfree(toastidxs);
 
@@ -1666,11 +1667,11 @@ toast_fetch_datum(struct varlena * attr)
 	toasttupDesc = toastrel->rd_att;
 	if (toastrel->rd_indexvalid == 0)
 		RelationGetIndexList(toastrel);
-	num_indexes = list_length(toastrel->rd_index_list);
+	num_indexes = list_length(toastrel->rd_indexlist);
 
 	toastidxs = (Relation *) palloc(num_indexes * sizeof(Relation));
 
-	foreach(lc, toastrel->rd_index_list)
+	foreach(lc, toastrel->rd_indexlist)
 		toastidxs[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
 
 	/*
@@ -1779,8 +1780,8 @@ toast_fetch_datum(struct varlena * attr)
 	 * End scan and close relations
 	 */
 	systable_endscan_ordered(toastscan);
-	for (i = 0, i < num_indexes, i++)
-		index_close(toastidxs[i], AccessShareLock);
+	for (count = 0; count < num_indexes; count++)
+		index_close(toastidxs[count], AccessShareLock);
 	heap_close(toastrel, AccessShareLock);
 	pfree(toastidxs);
 
@@ -1872,11 +1873,11 @@ toast_fetch_datum_slice(struct varlena * attr, int32 sliceoffset, int32 length)
 	toasttupDesc = toastrel->rd_att;
 	if (toastrel->rd_indexvalid == 0)
 		RelationGetIndexList(toastrel);
-	num_indexes = list_length(toastrel->rd_index_list);
+	num_indexes = list_length(toastrel->rd_indexlist);
 
 	toastidxs = (Relation *) palloc(num_indexes * sizeof(Relation));
 
-	foreach(lc, toastrel->rd_index_list)
+	foreach(lc, toastrel->rd_indexlist)
 		toastidxs[count++] = index_open(lfirst_oid(lc), RowExclusiveLock);
 
 	/*
@@ -2015,8 +2016,8 @@ toast_fetch_datum_slice(struct varlena * attr, int32 sliceoffset, int32 length)
 	 * End scan and close relations
 	 */
 	systable_endscan_ordered(toastscan);
-	for (i = 0, i < num_indexes, i++)
-		index_close(toastidxs[i], AccessShareLock);
+	for (count = 0; count < num_indexes; count++)
+		index_close(toastidxs[count], AccessShareLock);
 	heap_close(toastrel, AccessShareLock);
 	pfree(toastidxs);
 
