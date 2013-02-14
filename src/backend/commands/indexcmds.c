@@ -2193,11 +2193,14 @@ ReindexTable(RangeVar *relation, bool concurrent)
 		RangeVarCallbackOwnsTable, NULL);
 
 	/* Run through the concurrent process if necessary */
-	if (concurrent && !ReindexRelationConcurrently(heapOid))
+	if (concurrent)
 	{
-		ereport(NOTICE,
-				(errmsg("table \"%s\" has no indexes",
-						relation->relname)));
+		if (!ReindexRelationConcurrently(heapOid))
+		{
+			ereport(NOTICE,
+					(errmsg("table \"%s\" has no indexes",
+							relation->relname)));
+		}
 		return heapOid;
 	}
 

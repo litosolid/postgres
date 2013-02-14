@@ -1247,10 +1247,7 @@ index_concurrent_build(Oid heapOid,
 	indexInfo->ii_Concurrent = true;
 	indexInfo->ii_BrokenHotChain = false;
 
-	/*
-	 * Now build the index, in the case of a parent relation being a toast
-	 * relation, its reltoastidxid is updated when calling index_concurrent_swap.
-	 */
+	/* Now build the index */
 	index_build(rel, indexRelation, indexInfo, isprimary, false, false);
 
 	/* Close both the relations, but keep the locks */
