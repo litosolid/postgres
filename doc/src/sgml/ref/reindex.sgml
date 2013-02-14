@@ -68,10 +68,12 @@ REINDEX { INDEX | TABLE | DATABASE | SYSTEM } [ CONCURRENTLY ] <replaceable clas
       An index build with the <literal>CONCURRENTLY</> option failed, leaving
       an <quote>invalid</> index. Such indexes are useless but it can be
       convenient to use <command>REINDEX</> to rebuild them. Note that
-      <command>REINDEX</> will not perform a concurrent build if <literal>
-      CONCURRENTLY</> is not specified. To build the index without interfering
-      with production you should drop the index and reissue the <command>CREATE
-      INDEX CONCURRENTLY</> or <command>REINDEX CONCURRENTLY</> command.
+      <command>REINDEX</> will perform a concurrent build if <literal>
+      CONCURRENTLY</> is specified. To build the index without interfering
+      with production you should drop the index and reissue either the
+      <command>CREATE INDEX CONCURRENTLY</> or <command>REINDEX CONCURRENTLY</>
+      command. Indexes of toast relations can be rebuilt with <command>REINDEX
+      CONCURRENTLY</>.
      </para>
     </listitem>
 
@@ -318,7 +320,7 @@ Indexes:
     The recommended recovery method in such cases is to drop the concurrent
     index and try again to perform <command>REINDEX CONCURRENTLY</> once again.
     The concurrent index created during the processing has a name finishing by
-    the suffix cct.
+    the suffix cct. This works as well with indexes of toast relations.
    </para>
 
    <para>
@@ -334,14 +336,22 @@ Indexes:
    </para>
 
    <para>
-    <command>REINDEX SYSTEM</command> does not support <command>CONCURRENTLY
-    </command>.
+    Invalid indexes of toast relations can be dropped if a failure occurred
+    during <command>REINDEX CONCURRENTLY</>. Live indexes of toast relations
+    cannot be dropped.
    </para>
 
    <para>
     <command>REINDEX DATABASE</command> used with <command>CONCURRENTLY
-    </command> rebuilds concurrently only the non-system indexes. System
-    indexes are rebuilt with a non-concurrent context.
+    </command> rebuilds concurrently only the non-system relations. System
+    relations are rebuilt with a non-concurrent context. Toast indexes are
+    rebuilt concurrently if the relation they depend on is a non-system
+    relation.
+   </para>
+
+   <para>
+    <command>REINDEX SYSTEM</command> does not support <command>CONCURRENTLY
+    </command>.
    </para>
   </refsect2>
  </refsect1>
