@@ -1363,7 +1363,9 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 * their indexes. The swap can actually be safely done only if all the indexes
 	 * have valid Oids.
 	 */
-	if (swap_toast_by_content)
+	if (swap_toast_by_content &&
+		relform1->reltoastrelid &&
+		relform2->reltoastrelid)
 	{
 		Relation toastRel1, toastRel2;
 
