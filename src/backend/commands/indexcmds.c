@@ -2102,9 +2102,14 @@ ReindexIndex(RangeVar *indexRelation, bool concurrent)
 	Oid			indOid;
 	Oid			heapOid = InvalidOid;
 
+	/*
+	 * Two REINDEX CONCURRENTLY cannot be done in parallel on the same relation
+	 * so obtention of indOid fails if ShareUpdateExclusiveLock is already
+	 * taken on it.
+	 */
 	indOid = RangeVarGetRelidExtended(indexRelation,
 				concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock,
-				false, false,
+				false, concurrent ? true : false,
 				RangeVarCallbackForReindexIndex,
 				(void *) &heapOid);
 
@@ -2186,10 +2191,15 @@ ReindexTable(RangeVar *relation, bool concurrent)
 {
 	Oid			heapOid;
 
-	/* The lock level used here should match reindex_relation(). */
+	/*
+	 * The lock level used here should match reindex_relation().
+	 * Two REINDEX CONCURRENTLY cannot be done in parallel on the same relation
+	 * so obtention of heapOid fails if ShareUpdateExclusiveLock is already
+	 * taken on it.
+	 */
 	heapOid = RangeVarGetRelidExtended(relation,
 		concurrent ? ShareUpdateExclusiveLock : ShareLock,
-		false, false,
+		false, concurrent ? true : false,
 		RangeVarCallbackOwnsTable, NULL);
 
 	/* Run through the concurrent process if necessary */
