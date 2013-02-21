@@ -1196,7 +1196,7 @@ check_exclusion_constraint(Relation heap, Relation index, IndexInfo *indexInfo,
 	 * purpose.
 	 */
 	if (!index->rd_index->indisvalid)
-		return;
+		return true;
 
 	/*
 	 * Search the tuples that are in the index for any violations, including

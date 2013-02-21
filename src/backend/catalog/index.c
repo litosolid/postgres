@@ -1270,7 +1270,7 @@ index_concurrent_swap(Oid newIndexOid, Oid oldIndexOid)
 {
 	char		   *nameNew, *nameOld, *nameTemp;
 	Oid				parentOid = IndexGetRelation(oldIndexOid, false);
-	Relation		oldIndexRel, newIndexRel, parentRel;
+	Relation		oldIndexRel, newIndexRel;
 
 	/*
 	 * Take a lock on the old and new index before switching their names. This
